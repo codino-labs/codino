@@ -52,6 +52,18 @@ type Event struct {
 	Project string `json:"project,omitempty"`
 	// End removes the session.
 	End bool `json:"end,omitempty"`
+	// At is when the Agent signalled the event; zero means when the Host
+	// applies it. Events can reach the Host out of order (async hooks race):
+	// one older than the last event applied to its session is dropped.
+	At time.Time `json:"at,omitzero"`
+	// Acknowledge means the human has seen the session (a prompt typed into
+	// it). It travels with the event so the Host can act on it; Acknowledge
+	// semantics (clearing Done, resetting Escalation) are not applied yet.
+	Acknowledge bool `json:"acknowledge,omitempty"`
+	// PID is the Agent's process, the session's liveness handle; kept when 0.
+	PID int `json:"pid,omitempty"`
+	// Transcript is the Agent's transcript file; kept when empty.
+	Transcript string `json:"transcript,omitempty"`
 }
 
 // Validate reports whether the event can be applied.
@@ -74,26 +86,55 @@ const DefaultProjectColor = "#3a86ff"
 
 // session is one Agent Session as the Session Tracker holds it.
 type session struct {
-	id           string
+	id string
+	// lastEventAt is the At of the newest event applied.
+	lastEventAt  time.Time
 	project      string
 	state        SessionState
 	stateEntered time.Time
 	projectColor string
 	tile         int
+	pid          int
+	transcript   string
 }
 
 // tracker is the Session Tracker: every Agent Session, keyed by session id.
 type tracker struct {
 	sessions map[string]*session
+	// ended is when each recently removed session ended, so an event that
+	// was older but arrives later doesn't bring the session back.
+	ended map[string]time.Time
 }
 
-func newTracker() *tracker { return &tracker{sessions: map[string]*session{}} }
+func newTracker() *tracker {
+	return &tracker{sessions: map[string]*session{}, ended: map[string]time.Time{}}
+}
+
+// endedMemory is how long the tracker remembers a removed session: much
+// longer than any async hook takes to reach the Host Daemon.
+const endedMemory = time.Minute
 
 // apply records the event at now. It returns the session when it changed (nil
 // when it didn't) and whether it was removed.
 func (t *tracker) apply(e Event, now time.Time) (s *session, removed bool) {
+	at := e.At
+	if at.IsZero() || at.After(now) {
+		at = now
+	}
+	for id, ended := range t.ended {
+		if now.Sub(ended) > endedMemory {
+			delete(t.ended, id)
+		}
+	}
 	s, known := t.sessions[e.SessionID]
+	if known && at.Before(s.lastEventAt) {
+		return nil, false
+	}
+	if ended, ok := t.ended[e.SessionID]; ok && !known && !at.After(ended) {
+		return nil, false
+	}
 	if e.End {
+		t.ended[e.SessionID] = at
 		if !known {
 			return nil, false
 		}
@@ -104,19 +145,43 @@ func (t *tracker) apply(e Event, now time.Time) (s *session, removed bool) {
 		s = &session{id: e.SessionID, projectColor: DefaultProjectColor, tile: t.freeTile()}
 		t.sessions[e.SessionID] = s
 	}
+	s.lastEventAt = at
 	changed := !known
 	if e.State != s.state {
 		s.state = e.State
-		s.stateEntered = now
+		s.stateEntered = at
 		changed = true
 	}
 	if e.Project != "" {
 		s.project = e.Project
 	}
+	if e.PID != 0 {
+		s.pid = e.PID
+	}
+	if e.Transcript != "" {
+		s.transcript = e.Transcript
+	}
 	if !changed {
 		return nil, false
 	}
 	return s, false
+}
+
+// interrupt returns a Working or Awaiting Input session to Idle when the
+// human interrupted it at at, after its last event. It returns the session
+// when it changed.
+func (t *tracker) interrupt(id string, at, now time.Time) *session {
+	s := t.sessions[id]
+	if s == nil || (s.state != Working && s.state != AwaitingInput) || at.Before(s.lastEventAt) {
+		return nil
+	}
+	if at.After(now) {
+		at = now
+	}
+	s.lastEventAt = at
+	s.state = Idle
+	s.stateEntered = at
+	return s
 }
 
 // freeTile is the lowest Tile slot no session holds. A session keeps its slot

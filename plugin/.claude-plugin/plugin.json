@@ -1,0 +1,9 @@
+{
+  "name": "codino",
+  "version": "0.1.0",
+  "description": "Shows the state of your Claude Code sessions on a Codino USB LED matrix.",
+  "author": {
+    "name": "Roberto Gallea"
+  },
+  "repository": "https://github.com/codino-labs/codino"
+}

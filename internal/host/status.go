@@ -17,6 +17,9 @@ type SessionSummary struct {
 	Project      string       `json:"project,omitempty"`
 	ProjectColor string       `json:"project_color"`
 	Tile         int          `json:"tile"`
+	// PID is the Agent's process, 0 when unknown.
+	PID        int    `json:"pid,omitempty"`
+	Transcript string `json:"transcript,omitempty"`
 }
 
 // DeviceConnection describes the link to the Device.
@@ -39,6 +42,7 @@ func (h *Host) Status() Status {
 		st.Sessions = append(st.Sessions, SessionSummary{
 			ID: s.id, State: s.state, StateEntered: s.stateEntered,
 			Project: s.project, ProjectColor: s.projectColor, Tile: s.tile,
+			PID: s.pid, Transcript: s.transcript,
 		})
 	}
 	if h.device != nil {

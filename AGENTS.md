@@ -30,14 +30,15 @@ Run a single test with `go test -race ./internal/host -run 'TestReplug'`.
 ### Packages
 
 ```
-cmd/codino/          the one binary: CLI (`event`, `status`) and the Host Daemon (`daemon`)
+cmd/codino/          the one binary: CLI (`event`, `status`), the Host Daemon (`daemon`) and `hook` (internal, run by the plugin)
+internal/claudecode/ Claude Code Adapter: hook JSON → host.Events; transcript probe for interrupts (no hook fires)
 internal/host/       Host core: Session Tracker, Aggregate State, Device Link driving, heartbeat, exit grace; clock injected
 internal/devicelink/ handshake and claim; Discoverer seam (VirtualDevice now, USB serial later)
 internal/daemon/     local Unix socket: server, client (`Client.Deliver` spawns the daemon on demand)
 internal/protocol/   wire messages, as in protocol/README.md
 ```
 
-Every Agent's signals become `host.Event`s delivered with `daemon.Client.Deliver`: `codino event` does it from flags, the Claude Code Adapter will do it from hook JSON. Host core tests (`internal/host`) drive events and fake clock ticks in and assert on the protocol lines a fake Device receives, including the shared fixtures. The product name stays in `cmd/codino` (runtime directory name, `CODINO_VIRTUAL_DEVICE`, `CODINO_EXIT_GRACE`).
+Every Agent's signals become `host.Event`s delivered with `daemon.Client.Deliver`: `codino event` does it from flags, `codino hook` from hook JSON through the Claude Code Adapter. Events carry the time the Agent signalled them (`At`); the Session Tracker drops one older than the last applied to its session, because async hooks race. Host core tests (`internal/host`) drive events and fake clock ticks in and assert on the protocol lines a fake Device receives, including the shared fixtures; `claudecode_replay_test.go` replays the hook spike recordings in `fixtures/hooks/claude-code/` through the Adapter. The product name stays in `cmd/codino` (runtime directory name, `CODINO_VIRTUAL_DEVICE`, `CODINO_EXIT_GRACE`).
 
 ### Demo: `codino event` drives the Virtual Device
 
@@ -68,6 +69,19 @@ tail -f "$XDG_RUNTIME_DIR/codino/host.log"
 The socket, lock and log live in `$XDG_RUNTIME_DIR/codino/` (owner-only), or `$TMPDIR/codino-<uid>/` when `XDG_RUNTIME_DIR` is unset.
 
 The daemon exits after 5 minutes with no Agent Sessions (`--exit-grace`, or `CODINO_EXIT_GRACE=10s` so a spawned daemon inherits it); the next `codino event` spawns a new one. An exiting daemon refuses events with a `retiring` reply, so the client spawns the next daemon instead of losing them, and a new daemon waits for the old one to release the lock. Stop it early with Ctrl-C or `pkill -f 'codino daemon'`.
+
+### Claude Code plugin
+
+`plugin/` is the Claude Code plugin: `.claude-plugin/plugin.json` and `hooks/hooks.json`, where every hook is `async` and runs `"${CLAUDE_PLUGIN_ROOT}/bin/codino" hook`. `codino hook` reads the hook JSON on stdin, forwards it (spawning the Host Daemon unless the session is ending) and always exits 0. Nothing is ever written into the plugin root, which changes on every update: persistent Host state belongs in `$CLAUDE_PLUGIN_DATA`, runtime files in the runtime directory above. The hook→Session State mapping is documented on `claudecode.Events`.
+
+`make plugin` builds the Linux binary into `plugin/bin/` (git-ignored; per-OS packaging is #17). Try it in a scratch directory outside the repo, without touching `~/.claude`:
+
+```sh
+make plugin && make -C device
+export CODINO_VIRTUAL_DEVICE=$PWD/device/build/virtual-device
+cd "$(mktemp -d)" && claude --plugin-dir ~/code/claudino/plugin   # or: -p "say hi" --model haiku
+# elsewhere: codino status; tail -f "$XDG_RUNTIME_DIR/codino/host.log"
+```
 
 ## Protocol
 

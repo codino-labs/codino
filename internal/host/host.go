@@ -48,7 +48,29 @@ type Host struct {
 	// any); zero while there are sessions.
 	emptySince time.Time
 	retired    chan struct{}
+
+	transcripts TranscriptProbe
+	// lastTranscriptCheck is when Tick last probed the transcripts.
+	lastTranscriptCheck time.Time
 }
+
+// TranscriptProbe reads an Agent's transcript for what no hook reports.
+type TranscriptProbe interface {
+	// Interrupted reports whether the latest turn in the transcript at path
+	// ends with the human interrupting it (Esc, Ctrl-C, a denied permission
+	// or a rejected plan), and when.
+	Interrupted(path string) (at time.Time, ok bool)
+}
+
+// WithTranscriptProbe lets the Host return an interrupted session to Idle:
+// Claude Code fires no hook when the human interrupts a turn.
+func WithTranscriptProbe(p TranscriptProbe) Option {
+	return func(h *Host) { h.transcripts = p }
+}
+
+// TranscriptCheckInterval is how often the Host probes the transcripts of
+// Working and Awaiting Input sessions.
+const TranscriptCheckInterval = time.Second
 
 // DefaultExitGrace is how long the Host Daemon stays up with no sessions.
 const DefaultExitGrace = 5 * time.Minute
@@ -144,9 +166,50 @@ func (h *Host) Tick() {
 	}
 	look := h.device == nil && !h.closed &&
 		(h.lastFailedClaim.IsZero() || h.clock.Now().Sub(h.lastFailedClaim) >= ClaimRetryInterval)
+	probe := h.transcriptsToProbe()
 	h.unlock()
 	if look {
 		h.claim()
+	}
+	h.probeTranscripts(probe)
+}
+
+// transcriptsToProbe returns the transcript of every session a hook-less
+// interrupt could leave stuck, once per TranscriptCheckInterval. Callers hold
+// h.mu.
+func (h *Host) transcriptsToProbe() map[string]string {
+	now := h.clock.Now()
+	if h.transcripts == nil || now.Sub(h.lastTranscriptCheck) < TranscriptCheckInterval {
+		return nil
+	}
+	h.lastTranscriptCheck = now
+	probe := map[string]string{}
+	for id, s := range h.sessions.sessions {
+		if s.transcript != "" && (s.state == Working || s.state == AwaitingInput) {
+			probe[id] = s.transcript
+		}
+	}
+	return probe
+}
+
+// probeTranscripts reads the transcripts without h.mu (it is file I/O) and
+// returns interrupted sessions to Idle.
+func (h *Host) probeTranscripts(probe map[string]string) {
+	interrupted := map[string]time.Time{}
+	for id, path := range probe {
+		if at, ok := h.transcripts.Interrupted(path); ok {
+			interrupted[id] = at
+		}
+	}
+	if len(interrupted) == 0 {
+		return
+	}
+	h.mu.Lock()
+	defer h.unlock()
+	for id, at := range interrupted {
+		if s := h.sessions.interrupt(id, at, h.clock.Now()); s != nil {
+			h.send(upsert(s))
+		}
 	}
 }
 

@@ -5,6 +5,7 @@
 //	codino event --session ID --end
 //	codino status [--json]
 //	codino daemon [--virtual-device PATH] [--exit-grace DURATION]
+//	codino hook   (internal: run by the Claude Code plugin's hooks)
 package main
 
 import (
@@ -22,6 +23,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/codino-labs/codino/internal/claudecode"
 	"github.com/codino-labs/codino/internal/daemon"
 	"github.com/codino-labs/codino/internal/devicelink"
 	"github.com/codino-labs/codino/internal/host"
@@ -43,11 +45,14 @@ const usage = `usage:
   codino event --session ID --end
   codino status [--json]
   codino daemon [--virtual-device PATH] [--exit-grace DURATION]
+  codino hook   (internal: Claude Code hooks pipe their JSON to it)
 
 STATE is one of: idle, working, awaiting_input, done, error.
 `
 
 func main() {
+	// A hook's events are ordered by when its process started.
+	started := time.Now()
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
@@ -55,6 +60,8 @@ func main() {
 	paths := daemon.DefaultPaths(name)
 	var err error
 	switch cmd, args := os.Args[1], os.Args[2:]; cmd {
+	case "hook":
+		hook(paths, os.Stdin, os.Stderr, started) // never fails the hook
 	case "event":
 		err = event(paths, args)
 	case "status":
@@ -205,7 +212,8 @@ func runDaemon(paths daemon.Paths, args []string) error {
 		}
 		devices = devicelink.VirtualDevice{Path: path, Display: os.Stderr}
 	}
-	h := host.New(systemClock{}, devices, host.WithExitGrace(exitGrace))
+	h := host.New(systemClock{}, devices, host.WithExitGrace(exitGrace),
+		host.WithTranscriptProbe(claudecode.Transcripts{}))
 	defer h.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

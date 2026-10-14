@@ -116,3 +116,16 @@ func TestMCPElicitationIsAwaitingInputUntilAnswered(t *testing.T) {
 		t.Errorf("ElicitationResult gave %+v, want Working", e)
 	}
 }
+
+func TestEventsCarryAGuessedPIDAsGuessed(t *testing.T) {
+	// Without CLAUDE_PID the hook guesses its grandparent: the Host must not
+	// reap the session by it.
+	got, err := claudecode.Events(claudecode.Hook{Input: []byte(`{"session_id":"s","hook_event_name":"Stop"}`),
+		ReceivedAt: receivedAt, PID: 139150, PIDGuessed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].PID != 139150 || !got[0].PIDGuessed {
+		t.Fatalf("got %+v, want guessed pid 139150", got)
+	}
+}

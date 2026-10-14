@@ -32,6 +32,9 @@ type SessionSummary struct {
 	// PIDStarted is when PID's process started (platform units), 0 when
 	// unknown.
 	PIDStarted uint64 `json:"pid_started,omitempty"`
+	// PIDGuessed means PID was guessed, not named by the Agent: it never
+	// reaps the session.
+	PIDGuessed bool   `json:"pid_guessed,omitempty"`
 	Transcript string `json:"transcript,omitempty"`
 }
 
@@ -62,7 +65,7 @@ func (h *Host) Status() Status {
 		st.Sessions = append(st.Sessions, SessionSummary{
 			ID: s.id, State: s.state, StateEntered: s.stateEntered,
 			Project: s.project, ProjectColor: s.projectColor, Tile: s.tile,
-			PID: s.liveness.pid, PIDStarted: s.liveness.started, Transcript: s.transcript,
+			PID: s.liveness.pid, PIDStarted: s.liveness.started, PIDGuessed: s.liveness.guessed, Transcript: s.transcript,
 		})
 	}
 	if h.device != nil {

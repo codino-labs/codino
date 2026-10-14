@@ -68,6 +68,11 @@ type Event struct {
 	// platform measures it, so a reused pid isn't taken for the Agent; 0 when
 	// unknown. It goes with PID.
 	PIDStarted uint64 `json:"pid_started,omitempty"`
+	// PIDGuessed means PID is a guess (the hook's grandparent, CLAUDE_PID
+	// missing) rather than named by the Agent: it may be another process, so
+	// it is shown but never reaps the session, which relies on the staleness
+	// fallback instead. It goes with PID.
+	PIDGuessed bool `json:"pid_guessed,omitempty"`
 	// Transcript is the Agent's transcript file; kept when empty.
 	Transcript string `json:"transcript,omitempty"`
 }
@@ -110,11 +115,18 @@ type session struct {
 }
 
 // livenessHandle names the Agent's process: its pid and, when known, when it
-// started. The zero value means the session can't be probed.
+// started. The zero value means the session can't be probed, nor can a
+// guessed pid be.
 type livenessHandle struct {
 	pid     int
 	started uint64
+	// guessed means no event had the Agent name pid (CLAUDE_PID): it was
+	// guessed from the hook's process tree.
+	guessed bool
 }
+
+// probed reports whether the handle may reap its session.
+func (l livenessHandle) probed() bool { return l.pid != 0 && !l.guessed }
 
 // tracker is the Session Tracker: every Agent Session, keyed by session id.
 type tracker struct {
@@ -214,7 +226,7 @@ func (t *tracker) apply(e Event, root string, now time.Time) change {
 		s.project = e.Project
 	}
 	if e.PID != 0 {
-		s.liveness = s.liveness.update(e.PID, e.PIDStarted)
+		s.liveness = s.liveness.update(e.PID, e.PIDStarted, e.PIDGuessed)
 	}
 	if e.Transcript != "" {
 		s.transcript = e.Transcript
@@ -297,12 +309,18 @@ func (t *tracker) staleToIdle(id string, modified, now time.Time) *session {
 }
 
 // update is the handle after an event named pid, started at started (0 when
-// that hook couldn't read it): the same pid keeps its known start time.
-func (l livenessHandle) update(pid int, started uint64) livenessHandle {
-	if pid == l.pid && started == 0 {
-		return l
+// that hook couldn't read it), guessed or not: the same pid keeps its known
+// start time, and once the Agent has named it, a later guess of the same pid
+// doesn't make it a guess again.
+func (l livenessHandle) update(pid int, started uint64, guessed bool) livenessHandle {
+	if pid != l.pid {
+		return livenessHandle{pid: pid, started: started, guessed: guessed}
 	}
-	return livenessHandle{pid: pid, started: started}
+	if started != 0 {
+		l.started = started
+	}
+	l.guessed = l.guessed && guessed
+	return l
 }
 
 // reap removes a session whose Agent exited at now, unless an event has
@@ -356,12 +374,13 @@ func (t *tracker) transcriptsToProbe() map[string]string {
 	return probe
 }
 
-// livenessToProbe returns the liveness handle of every session that has one,
-// by session id. A session without one is never reaped.
+// livenessToProbe returns the liveness handle of every session that has one
+// the Agent named, by session id. A session without one, or with a guessed
+// pid, is never reaped.
 func (t *tracker) livenessToProbe() map[string]livenessHandle {
 	probe := map[string]livenessHandle{}
 	for id, s := range t.sessions {
-		if s.liveness.pid != 0 {
+		if s.liveness.probed() {
 			probe[id] = s.liveness
 		}
 	}

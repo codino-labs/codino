@@ -41,12 +41,12 @@ func forwardHook(paths daemon.Paths, stdin io.Reader, receivedAt time.Time) erro
 	// The start time is read here, while the Agent is certainly alive (it
 	// runs this hook), not later in the Host Daemon, when its pid may
 	// already name another process.
-	pid := claudePID()
+	pid, guessed := claudePID()
 	var started uint64
 	if pid != 0 {
 		started = liveness.Started(pid)
 	}
-	events, err := claudecode.Events(claudecode.Hook{Input: input, ReceivedAt: receivedAt, PID: pid, PIDStarted: started})
+	events, err := claudecode.Events(claudecode.Hook{Input: input, ReceivedAt: receivedAt, PID: pid, PIDStarted: started, PIDGuessed: guessed})
 	if err != nil || len(events) == 0 {
 		return err
 	}
@@ -70,13 +70,15 @@ func forwardHook(paths daemon.Paths, stdin io.Reader, receivedAt time.Time) erro
 }
 
 // claudePID is the Claude Code process that runs the hook: CLAUDE_PID, set
-// by Claude Code though undocumented, or else the hook's grandparent (hook →
-// sh → claude), where the OS shows it (Linux, macOS; not Windows, where Git
-// Bash sits in between). 0 when neither is known: the session
-// is then never reaped, only returned to Idle when stale.
-func claudePID() int {
+// by Claude Code though undocumented, or else, guessed, the hook's
+// grandparent (hook → sh → claude), where the OS shows it (Linux, macOS; not
+// Windows, where Git Bash sits in between). A guess may name another process
+// (a wrapper, a different shell chain), so it is only shown: the session is
+// reaped only by CLAUDE_PID, and otherwise returned to Idle when stale.
+func claudePID() (pid int, guessed bool) {
 	if pid, err := strconv.Atoi(os.Getenv("CLAUDE_PID")); err == nil && pid > 0 {
-		return pid
+		return pid, false
 	}
-	return liveness.Parent(os.Getppid())
+	pid = liveness.Parent(os.Getppid())
+	return pid, pid != 0
 }

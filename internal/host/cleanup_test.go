@@ -215,3 +215,62 @@ func TestHookThatCouldNotReadTheStartTimeKeepsTheKnownOne(t *testing.T) {
 
 	assertStates(t, sessionStates(t, dev.Received()), "working", "done", "removed")
 }
+
+func TestSessionWithAGuessedPIDIsShownButNeverReaped(t *testing.T) {
+	// Without CLAUDE_PID the hook guesses the Agent's pid from its process
+	// tree: a guess may name the wrong process, so its exit must not remove
+	// the session.
+	clock := clockAt(recordingStart)
+	liveness := &fakeLiveness{clock: clock, exits: map[int]time.Time{100: clock.Now()}}
+	dev := newReferenceDevice(t)
+	h := host.New(clock, devices(dev), host.WithLivenessProbe(liveness))
+	defer h.Close()
+	h.Tick()
+	apply(t, h, host.Event{SessionID: "a", State: host.Done, PID: 100, PIDGuessed: true})
+
+	for range 10 {
+		clock.Advance(host.ProbeInterval)
+		h.Tick()
+	}
+
+	assertStates(t, sessionStates(t, dev.Received()), "done")
+	if len(liveness.probed) != 0 {
+		t.Fatalf("probed guessed pids %v", liveness.probed)
+	}
+	sessions := h.Status().Sessions
+	if len(sessions) != 1 || sessions[0].PID != 100 || !sessions[0].PIDGuessed {
+		t.Fatalf("status sessions %+v, want a with guessed pid 100", sessions)
+	}
+}
+
+func TestSessionWithAGuessedPIDFallsBackToIdleWhenStale(t *testing.T) {
+	clock := clockAt(recordingStart)
+	liveness := &fakeLiveness{clock: clock, exits: map[int]time.Time{100: clock.Now()}}
+	dev := newReferenceDevice(t)
+	h := host.New(clock, devices(dev), host.WithLivenessProbe(liveness),
+		host.WithTranscriptProbe(&quietTranscript{modified: clock.Now()}))
+	defer h.Close()
+	h.Tick()
+	apply(t, h, host.Event{SessionID: "a", State: host.Working, PID: 100, PIDGuessed: true, Transcript: "/t.jsonl"})
+
+	clock.Advance(host.StaleAfter)
+	h.Tick()
+
+	assertStates(t, sessionStates(t, dev.Received()), "working", "idle")
+}
+
+func TestSessionWhosePIDCameFromTheAgentAfterAGuessIsReaped(t *testing.T) {
+	clock := clockAt(recordingStart)
+	liveness := &fakeLiveness{clock: clock, exits: map[int]time.Time{100: clock.Now().Add(time.Second)}}
+	dev := newReferenceDevice(t)
+	h := host.New(clock, devices(dev), host.WithLivenessProbe(liveness))
+	defer h.Close()
+	h.Tick()
+	apply(t, h, host.Event{SessionID: "a", State: host.Working, PID: 100, PIDGuessed: true})
+	apply(t, h, host.Event{SessionID: "a", State: host.Done, PID: 100})
+
+	clock.Advance(2 * time.Second)
+	h.Tick()
+
+	assertStates(t, sessionStates(t, dev.Received()), "working", "done", "removed")
+}

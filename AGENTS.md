@@ -25,6 +25,48 @@ test -z "$(gofmt -l .)" && go vet ./... && go test -race ./...
 
 `-race` matters: the daemon serves many hook connections and one serial port concurrently.
 
+Run a single test with `go test -race ./internal/host -run 'TestReplug'`.
+
+### Packages
+
+```
+cmd/codino/          the one binary: CLI (`event`, `status`) and the Host Daemon (`daemon`)
+internal/host/       Host core: Session Tracker, Aggregate State, Device Link driving; clock injected
+internal/devicelink/ handshake and claim; Discoverer seam (VirtualDevice now, USB serial later)
+internal/daemon/     local Unix socket: server, client (`Client.Deliver` spawns the daemon on demand)
+internal/protocol/   wire messages, as in protocol/README.md
+```
+
+Every Agent's signals become `host.Event`s delivered with `daemon.Client.Deliver`: `codino event` does it from flags, the Claude Code Adapter will do it from hook JSON. Host core tests (`internal/host`) drive events and fake clock ticks in and assert on the protocol lines a fake Device receives, including the shared fixtures. The product name stays in `cmd/codino` (runtime directory name, `CODINO_VIRTUAL_DEVICE`).
+
+### Demo: `codino event` drives the Virtual Device
+
+Real USB discovery isn't built yet, so the Host Daemon drives the terminal Virtual Device: it spawns it as a subprocess and speaks the protocol on its stdin/stdout. The matrix goes to the daemon's stderr. Run the daemon in the foreground in one terminal to watch the matrix:
+
+```sh
+make -C device && go build -o codino ./cmd/codino
+./codino daemon --virtual-device device/build/virtual-device
+```
+
+and send events from another:
+
+```sh
+./codino event --session a --state working --project .
+./codino event --session b --state awaiting_input
+./codino status
+./codino event --session b --end
+```
+
+Without a running daemon, `codino event` spawns one in the background. It reads the Virtual Device path from `CODINO_VIRTUAL_DEVICE` (use an absolute path) and writes its output, matrix included, to `host.log` next to the socket:
+
+```sh
+export CODINO_VIRTUAL_DEVICE=$PWD/device/build/virtual-device
+./codino event --session a --state awaiting_input
+tail -f "$XDG_RUNTIME_DIR/codino/host.log"
+```
+
+The socket, lock and log live in `$XDG_RUNTIME_DIR/codino/` (owner-only), or `$TMPDIR/codino-<uid>/` when `XDG_RUNTIME_DIR` is unset. The daemon doesn't exit by itself yet (#7): stop it with Ctrl-C or `pkill -f 'codino daemon'`.
+
 ## Protocol
 
 `protocol/README.md` is the wire protocol spec (currently v0); `protocol/fixtures/` holds one example `.jsonl` per message kind. Both sides test against the fixtures: Host tests produce them, Device tests accept them. A protocol change updates the spec and the fixtures in the same commit.

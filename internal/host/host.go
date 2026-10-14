@@ -164,7 +164,7 @@ func (h *Host) Apply(e Event) error {
 	}
 	now := h.clock.Now()
 	s, removed := h.sessions.apply(e, now)
-	h.countSessions(now)
+	h.updateExitGrace(now)
 	switch {
 	case s == nil:
 	case removed:
@@ -175,9 +175,9 @@ func (h *Host) Apply(e Event) error {
 	return nil
 }
 
-// countSessions starts the exit grace when the last session is gone and
+// updateExitGrace starts the exit grace when the last session is gone and
 // stops it while there are any. Callers hold h.mu.
-func (h *Host) countSessions(now time.Time) {
+func (h *Host) updateExitGrace(now time.Time) {
 	switch empty := len(h.sessions.sessions) == 0; {
 	case !empty:
 		h.emptySince = time.Time{}
@@ -206,16 +206,16 @@ func (h *Host) Tick() {
 	}
 	look := h.device == nil && !h.closed &&
 		(h.lastFailedClaim.IsZero() || h.clock.Now().Sub(h.lastFailedClaim) >= ClaimRetryInterval)
-	probe := h.toProbe()
+	targets := h.toProbe()
 	h.unlock()
 	if look {
 		h.claim()
 	}
-	h.probe(probe)
+	h.probe(targets)
 }
 
-// probes is what one probe pass reads, by session id.
-type probes struct {
+// probeTargets is what one probe pass reads, by session id.
+type probeTargets struct {
 	transcripts map[string]string
 	liveness    map[string]livenessHandle
 }
@@ -223,13 +223,13 @@ type probes struct {
 // toProbe returns, once per ProbeInterval, the transcript of every session a
 // hook-less interrupt could leave stuck and the liveness handle of every
 // session that has one. Callers hold h.mu.
-func (h *Host) toProbe() probes {
+func (h *Host) toProbe() probeTargets {
 	now := h.clock.Now()
 	if now.Sub(h.lastProbe) < ProbeInterval {
-		return probes{}
+		return probeTargets{}
 	}
 	h.lastProbe = now
-	var p probes
+	var p probeTargets
 	if h.transcripts != nil {
 		p.transcripts = h.sessions.transcriptsToProbe()
 	}
@@ -242,7 +242,7 @@ func (h *Host) toProbe() probes {
 // probe runs the probes without h.mu (they are file and OS I/O), then reaps
 // sessions whose Agent is gone and returns interrupted and stale ones to
 // Idle.
-func (h *Host) probe(p probes) {
+func (h *Host) probe(p probeTargets) {
 	read := map[string]Transcript{}
 	for id, path := range p.transcripts {
 		read[id] = h.transcripts.Read(path)
@@ -265,7 +265,7 @@ func (h *Host) probe(p probes) {
 			h.send(protocol.NewSessionRemove(s.id))
 		}
 	}
-	h.countSessions(now)
+	h.updateExitGrace(now)
 	for id, tr := range read {
 		s := h.sessions.interrupt(id, tr.Interrupted, now)
 		if s == nil {

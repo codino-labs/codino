@@ -197,3 +197,19 @@ func TestHookAfterQuietTranscriptKeepsTheSessionWorking(t *testing.T) {
 
 	assertStates(t, sessionStates(t, dev.Received()), "working")
 }
+
+func TestHookThatCouldNotReadTheStartTimeKeepsTheKnownOne(t *testing.T) {
+	clock := clockAt(recordingStart)
+	liveness := &fakeLiveness{clock: clock, started: map[int]uint64{4242: 9001}}
+	dev := newReferenceDevice(t)
+	h := host.New(clock, devices(dev), host.WithLivenessProbe(liveness))
+	defer h.Close()
+	h.Tick()
+	apply(t, h, host.Event{SessionID: "a", State: host.Working, PID: 4242, PIDStarted: 1234})
+	apply(t, h, host.Event{SessionID: "a", State: host.Done, PID: 4242})
+
+	clock.Advance(host.ProbeInterval)
+	h.Tick()
+
+	assertStates(t, sessionStates(t, dev.Received()), "working", "done", "removed")
+}

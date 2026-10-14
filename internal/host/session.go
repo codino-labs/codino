@@ -142,12 +142,8 @@ func (t *tracker) apply(e Event, now time.Time) (s *session, removed bool) {
 		return nil, false
 	}
 	if e.End {
-		t.ended[e.SessionID] = at
-		if !known {
-			return nil, false
-		}
-		delete(t.sessions, e.SessionID)
-		return s, true
+		t.forget(e.SessionID, at)
+		return s, known
 	}
 	if !known {
 		s = &session{id: e.SessionID, projectColor: DefaultProjectColor, tile: t.freeTile()}
@@ -164,7 +160,7 @@ func (t *tracker) apply(e Event, now time.Time) (s *session, removed bool) {
 		s.project = e.Project
 	}
 	if e.PID != 0 {
-		s.liveness = livenessHandle{pid: e.PID, started: e.PIDStarted}
+		s.liveness = s.liveness.update(e.PID, e.PIDStarted)
 	}
 	if e.Transcript != "" {
 		s.transcript = e.Transcript
@@ -187,9 +183,14 @@ func (t *tracker) interrupt(id string, at, now time.Time) *session {
 	if at.After(s.lastEventAt) {
 		s.lastEventAt = at
 	}
+	s.toIdle(at)
+	return s
+}
+
+// toIdle returns a stuck session to Idle, entered at at.
+func (s *session) toIdle(at time.Time) {
 	s.state = Idle
 	s.stateEntered = at
-	return s
 }
 
 // staleToIdle returns a Working session to Idle when neither a hook nor its
@@ -207,9 +208,17 @@ func (t *tracker) staleToIdle(id string, modified, now time.Time) *session {
 	if now.Sub(active) < StaleAfter {
 		return nil
 	}
-	s.state = Idle
-	s.stateEntered = now
+	s.toIdle(now)
 	return s
+}
+
+// update is the handle after an event named pid, started at started (0 when
+// that hook couldn't read it): the same pid keeps its known start time.
+func (l livenessHandle) update(pid int, started uint64) livenessHandle {
+	if pid == l.pid && started == 0 {
+		return l
+	}
+	return livenessHandle{pid: pid, started: started}
 }
 
 // reap removes a session whose Agent exited at now, unless an event has
@@ -220,9 +229,15 @@ func (t *tracker) reap(id string, gone livenessHandle, now time.Time) *session {
 	if s == nil || s.liveness != gone {
 		return nil
 	}
-	delete(t.sessions, id)
-	t.ended[id] = now
+	t.forget(id, now)
 	return s
+}
+
+// forget removes a session that ended at at, and remembers it ended so an
+// older event arriving later doesn't bring it back.
+func (t *tracker) forget(id string, at time.Time) {
+	delete(t.sessions, id)
+	t.ended[id] = at
 }
 
 // hookStartLag bounds how long after Claude Code fires a hook its process

@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/codino-labs/codino/internal/liveness"
 )
@@ -54,9 +55,13 @@ func TestAgentKilledButNotYetWaitedForIsGone(t *testing.T) {
 	}
 	cmd := startAgent(t)
 	pid := cmd.Process.Pid
+	started := liveness.Started(pid)
 	cmd.Process.Kill()
-	for !(liveness.Probe{}).Gone(pid, liveness.Started(pid)) {
-		runtime.Gosched() // the kernel turns it into a zombie promptly
+	// The kernel turns it into a zombie promptly; this polls, never sleeps.
+	for deadline := time.Now().Add(5 * time.Second); !(liveness.Probe{}).Gone(pid, started); runtime.Gosched() {
+		if time.Now().After(deadline) {
+			t.Fatal("a killed Agent not yet waited for is not gone")
+		}
 	}
 }
 

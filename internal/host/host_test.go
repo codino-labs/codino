@@ -300,13 +300,13 @@ func TestSessionsKeepTheirTileAndNewcomersTakeTheFirstFreeOne(t *testing.T) {
 	)
 
 	assertMessages(t, since(dev, 1), []string{
-		`{"type":"session_upsert","id":"a","state":"working","project_color":"#3a86ff","state_entered":1760432400000,"tile":0}`,
-		`{"type":"session_upsert","id":"b","state":"working","project_color":"#3a86ff","state_entered":1760432400000,"tile":1}`,
-		`{"type":"session_upsert","id":"c","state":"working","project_color":"#3a86ff","state_entered":1760432400000,"tile":2}`,
+		`{"type":"session_upsert","id":"a","state":"working","project_color":"#a040ff","state_entered":1760432400000,"tile":0}`,
+		`{"type":"session_upsert","id":"b","state":"working","project_color":"#30e040","state_entered":1760432400000,"tile":1}`,
+		`{"type":"session_upsert","id":"c","state":"working","project_color":"#ff3030","state_entered":1760432400000,"tile":2}`,
 		`{"type":"session_upsert","id":"d","state":"working","project_color":"#3a86ff","state_entered":1760432400000,"tile":3}`,
 		`{"type":"session_remove","id":"a"}`,
-		`{"type":"session_upsert","id":"c","state":"done","project_color":"#3a86ff","state_entered":1760432400000,"tile":2}`,
-		`{"type":"session_upsert","id":"e","state":"idle","project_color":"#3a86ff","state_entered":1760432400000,"tile":0}`,
+		`{"type":"session_upsert","id":"c","state":"done","project_color":"#ff3030","state_entered":1760432400000,"tile":2}`,
+		`{"type":"session_upsert","id":"e","state":"idle","project_color":"#e6e600","state_entered":1760432400000,"tile":0}`,
 	})
 }
 
@@ -328,7 +328,7 @@ func TestHostClaimsOnlyADeviceThatAnswersTheHandshakeEvenAfterBootNoise(t *testi
 		}
 	}
 	assertMessages(t, since(reference, 1), []string{
-		`{"type":"session_upsert","id":"a","state":"working","project_color":"#3a86ff","state_entered":1760432400000,"tile":0}`,
+		`{"type":"session_upsert","id":"a","state":"working","project_color":"#a040ff","state_entered":1760432400000,"tile":0}`,
 	})
 	if dev := h.Status().Device; !dev.Claimed || dev.Name != "fake3" || dev.Firmware != "0.1.0" {
 		t.Errorf("Status().Device = %+v, want fake3 claimed with firmware 0.1.0", dev)
@@ -372,8 +372,8 @@ func TestReplugGetsTheHandshakeAndEverySessionAgain(t *testing.T) {
 
 	assertMessages(t, plugged.Received(), []string{
 		`{"type":"hello","protocol":0,"host_time":1760432401000}`,
-		`{"type":"session_upsert","id":"a","state":"working","project_color":"#3a86ff","state_entered":1760432400000,"tile":0}`,
-		`{"type":"session_upsert","id":"b","state":"awaiting_input","project_color":"#3a86ff","state_entered":1760432400000,"tile":1}`,
+		`{"type":"session_upsert","id":"a","state":"working","project_color":"#a040ff","state_entered":1760432400000,"tile":0}`,
+		`{"type":"session_upsert","id":"b","state":"awaiting_input","project_color":"#30e040","state_entered":1760432400000,"tile":1}`,
 	})
 }
 
@@ -420,7 +420,7 @@ func TestStatusListsSessionsByTile(t *testing.T) {
 
 	want := []host.SessionSummary{
 		{ID: "a", State: host.AwaitingInput, StateEntered: time.UnixMilli(1760432401000), Project: "/src/app", ProjectColor: "#ff3030", Tile: 0},
-		{ID: "b", State: host.Done, StateEntered: time.UnixMilli(1760432401000), ProjectColor: "#3a86ff", Tile: 1},
+		{ID: "b", State: host.Done, StateEntered: time.UnixMilli(1760432401000), ProjectColor: "#30e040", Tile: 1},
 	}
 	if !reflect.DeepEqual(st.Sessions, want) {
 		t.Errorf("Sessions =\n%+v\nwant\n%+v", st.Sessions, want)

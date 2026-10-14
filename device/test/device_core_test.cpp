@@ -921,7 +921,7 @@ TEST_CASE_FIXTURE(Device8x8, "sessions whose Tiles don't fit the Layout take the
   CHECK(isFilled(core.render(), kRight, kPink));
 }
 
-TEST_CASE_FIXTURE(Device8x8, "a session upsert without a Tile slot takes the first free Tile") {
+TEST_CASE_FIXTURE(Device8x8, "a session upsert without a Tile takes the first free one") {
   core.receive(upsertTile("a", "done", "#2ad14f", 1));
   core.receive(R"({"type":"session_upsert","id":"b","state":"done","project_color":"#ff3da5"})");
 
@@ -1043,7 +1043,7 @@ TEST_CASE_FIXTURE(Device8x8, "a Tile of a session Awaiting Input escalates: it p
   CHECK(sameHue(core.render().at(0, 0), kGreen));
 }
 
-TEST_CASE_FIXTURE(Device8x8, "a Takeover takes the whole matrix in the per-session Layout") {
+TEST_CASE_FIXTURE(Device8x8, "a Takeover takes the whole matrix in the adaptive Layout") {
   core.receive(upsertTile("a", "awaiting_input", "#2ad14f", 0));
   core.receive(upsertTile("b", "working", "#ff3da5", 1));
   core.receive(upsertTile("c", "done", "#3a86ff", 2));

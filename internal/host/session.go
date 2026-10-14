@@ -166,18 +166,23 @@ func (t *tracker) apply(e Event, root string, now time.Time) change {
 		return change{}
 	}
 	if e.End {
+		moved := t.forget(e.SessionID, at)
 		if !known {
-			t.ended[e.SessionID] = at
 			return change{}
 		}
-		return change{s: s, removed: true, moved: t.forget(e.SessionID, at)}
+		return change{s: s, removed: true, moved: moved}
 	}
 	if !known && e.State == "" {
 		return change{} // an Acknowledge of a session the Host doesn't know
 	}
 	if !known {
 		s = &session{id: e.SessionID, root: root, started: at, tile: noTile}
-		s.projectColor = t.projectColor(s, root)
+		if root == "" {
+			// Without a project the session is a project of its own, so it
+			// never shares a color with another.
+			s.root = "\x00session " + e.SessionID
+		}
+		s.projectColor = t.projectColor(s, s.root)
 		t.sessions[e.SessionID] = s
 	}
 	var moved []*session
@@ -409,20 +414,20 @@ func (t *tracker) assignTiles() []*session {
 	})
 	before := map[*session]int{}
 	used := map[int]bool{}
-	var homeless []*session
+	var unfit []*session
 	for _, s := range byStart {
 		before[s] = s.tile
 		if s.tile != noTile && s.tile < room && !used[s.tile] {
 			used[s.tile] = true
 		} else {
-			homeless = append(homeless, s)
+			unfit = append(unfit, s)
 		}
 	}
 	var overflow []*session
-	for _, s := range homeless {
-		if slot := firstFree(used, 0); slot < room {
-			used[slot] = true
-			s.tile = slot
+	for _, s := range unfit {
+		if tile := firstFree(used, 0); tile < room {
+			used[tile] = true
+			s.tile = tile
 		} else {
 			overflow = append(overflow, s)
 		}

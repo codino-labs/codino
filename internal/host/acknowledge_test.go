@@ -60,7 +60,7 @@ func TestDoneDecayEntersIdleWhenTheDecayWasDue(t *testing.T) {
 	h.Tick()
 
 	assertMessages(t, withoutHeartbeats(since(dev, sent)), []string{
-		`{"type":"session_upsert","id":"b","state":"idle","project_color":"#3a86ff","state_entered":1760432460000,"tile":1}`,
+		`{"type":"session_upsert","id":"b","state":"idle","project_color":"#30e040","state_entered":1760432460000,"tile":1}`,
 	})
 }
 
@@ -97,16 +97,16 @@ func TestAnAcknowledgeOfOneSessionAffectsOnlyThatSession(t *testing.T) {
 		want  []string
 	}{
 		{"Done is cleared", host.Event{SessionID: "done", Acknowledge: true}, []string{
-			`{"type":"session_upsert","id":"done","state":"idle","project_color":"#3a86ff","state_entered":1760432460000,"tile":0}`,
+			`{"type":"session_upsert","id":"done","state":"idle","project_color":"#ff40c0","state_entered":1760432460000,"tile":0}`,
 		}},
 		{"Escalation restarts and Awaiting Input stays", host.Event{SessionID: "asking", Acknowledge: true}, []string{
 			`{"type":"acknowledge","id":"asking","host_time":1760432460000}`,
 		}},
 		{"a new prompt makes it Working", host.Event{SessionID: "done", State: host.Working, Acknowledge: true}, []string{
-			`{"type":"session_upsert","id":"done","state":"working","project_color":"#3a86ff","state_entered":1760432460000,"tile":0}`,
+			`{"type":"session_upsert","id":"done","state":"working","project_color":"#ff40c0","state_entered":1760432460000,"tile":0}`,
 		}},
 		{"a new prompt to a session Awaiting Input", host.Event{SessionID: "asking", State: host.Working, Acknowledge: true}, []string{
-			`{"type":"session_upsert","id":"asking","state":"working","project_color":"#3a86ff","state_entered":1760432460000,"tile":1}`,
+			`{"type":"session_upsert","id":"asking","state":"working","project_color":"#00d0d0","state_entered":1760432460000,"tile":1}`,
 		}},
 		{"an Idle session has nothing to clear", host.Event{SessionID: "idle", Acknowledge: true}, nil},
 		{"an unknown session is not created", host.Event{SessionID: "unknown", Acknowledge: true}, nil},
@@ -161,9 +161,9 @@ func TestADeviceClaimedAgainLearnsWhenEachWaitingSessionWasAcknowledged(t *testi
 
 	assertMessages(t, plugged.Received(), []string{
 		`{"type":"hello","protocol":0,"host_time":1760432461000}`,
-		`{"type":"session_upsert","id":"a","state":"awaiting_input","project_color":"#3a86ff","state_entered":1760432400000,"tile":0}`,
+		`{"type":"session_upsert","id":"a","state":"awaiting_input","project_color":"#a040ff","state_entered":1760432400000,"tile":0}`,
 		`{"type":"acknowledge","id":"a","host_time":1760432460000}`,
-		`{"type":"session_upsert","id":"b","state":"awaiting_input","project_color":"#3a86ff","state_entered":1760432400000,"tile":1}`,
+		`{"type":"session_upsert","id":"b","state":"awaiting_input","project_color":"#30e040","state_entered":1760432400000,"tile":1}`,
 	})
 }
 
@@ -211,8 +211,8 @@ func TestAnAcknowledgeOnTheDeviceClearsEveryDoneSessionAndRestartsEveryEscalatio
 
 	// The Device restarted Escalation itself: no acknowledge goes back.
 	assertMessages(t, since(dev, sent), []string{
-		`{"type":"session_upsert","id":"a","state":"idle","project_color":"#3a86ff","state_entered":1760432460000,"tile":0}`,
-		`{"type":"session_upsert","id":"c","state":"idle","project_color":"#3a86ff","state_entered":1760432460000,"tile":2}`,
+		`{"type":"session_upsert","id":"a","state":"idle","project_color":"#a040ff","state_entered":1760432460000,"tile":0}`,
+		`{"type":"session_upsert","id":"c","state":"idle","project_color":"#ff3030","state_entered":1760432460000,"tile":2}`,
 	})
 	// But the Host keeps it, for a Device claimed again.
 	dev.Unplug()
@@ -221,7 +221,7 @@ func TestAnAcknowledgeOnTheDeviceClearsEveryDoneSessionAndRestartsEveryEscalatio
 	h.Tick()
 	assertMessages(t, since(plugged, 3), []string{
 		`{"type":"acknowledge","id":"b","host_time":1760432460000}`,
-		`{"type":"session_upsert","id":"c","state":"idle","project_color":"#3a86ff","state_entered":1760432460000,"tile":2}`,
+		`{"type":"session_upsert","id":"c","state":"idle","project_color":"#ff3030","state_entered":1760432460000,"tile":2}`,
 		`{"type":"session_upsert","id":"d","state":"working","project_color":"#3a86ff","state_entered":1760432400000,"tile":3}`,
 	})
 }

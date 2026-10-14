@@ -5,7 +5,9 @@ import "hash/fnv"
 // ProjectColors is the palette the Project Color Allocator hashes repo roots
 // onto: well-separated hues, so two projects are easy to tell apart on the
 // matrix.
-var ProjectColors = []string{
+func ProjectColors() []string { return append([]string(nil), projectColors...) }
+
+var projectColors = []string{
 	"#ff3030", // red
 	"#ff8c00", // orange
 	"#e6e600", // yellow
@@ -32,11 +34,14 @@ func WithProjectRoots(p ProjectRootProbe) Option {
 // WithPinnedProjectColors pins a Project Color ("#rrggbb") to the sessions of
 // a repo root, whatever the hash says. Preferences carry the pins (#11).
 func WithPinnedProjectColors(pins map[string]string) Option {
-	return func(h *Host) {
-		h.sessions.pins = map[string]string{}
-		for root, color := range pins {
-			h.sessions.pins[root] = color
-		}
+	return func(h *Host) { h.sessions.pin(pins) }
+}
+
+// pin sets the pinned Project Colors, by repo root.
+func (t *tracker) pin(pins map[string]string) {
+	t.pins = map[string]string{}
+	for root, color := range pins {
+		t.pins[root] = color
 	}
 }
 
@@ -65,11 +70,11 @@ func (t *tracker) projectColor(s *session, root string) string {
 	}
 	hash := fnv.New32a()
 	hash.Write([]byte(root))
-	first := int(hash.Sum32() % uint32(len(ProjectColors)))
-	for i := range ProjectColors {
-		if color := ProjectColors[(first+i)%len(ProjectColors)]; !held[color] {
+	first := int(hash.Sum32() % uint32(len(projectColors)))
+	for i := range projectColors {
+		if color := projectColors[(first+i)%len(projectColors)]; !held[color] {
 			return color
 		}
 	}
-	return ProjectColors[first]
+	return projectColors[first]
 }

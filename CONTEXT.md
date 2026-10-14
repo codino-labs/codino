@@ -87,7 +87,7 @@ How long the Host Daemon stays up with no Agent Sessions before it retires (exit
 _Avoid_: timeout, idle timeout (Idle is a Session State)
 
 **Layout**:
-How the matrix area is used: one Aggregate State for the whole matrix, or one tile per Agent Session.
+How the matrix area is used: the Aggregate Layout (one Aggregate State for the whole matrix) or the adaptive Layout (one Tile per Agent Session, split by how many there are).
 _Avoid_: view, screen, mode
 
 **Tile**:

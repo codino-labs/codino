@@ -10,8 +10,11 @@ import (
 )
 
 // Project Color (#10): a pinned color, else a stable hash of the project's
-// repo root onto host.ProjectColors; a collision with an active session of
+// repo root onto palette; a collision with an active session of
 // another project bumps the newcomer to the next free hue for its lifetime.
+
+// palette is the Project Color palette.
+var palette = host.ProjectColors()
 
 // fakeRoots is the injected ProjectRootProbe: the repo root of each project
 // directory, the directory itself when it isn't listed (not in a repo).
@@ -65,10 +68,7 @@ func colorsOf(t *testing.T, dev *fakeDevice) map[string]string {
 // projectColorHost is a claimed Host for Project Color tests.
 func projectColorHost(t *testing.T, opts ...host.Option) (*host.Host, *fakeDevice) {
 	t.Helper()
-	dev := newReferenceDevice(t)
-	h := host.New(clockAt(1760432400000), devices(dev), opts...)
-	t.Cleanup(h.Close)
-	h.Tick()
+	h, dev, _ := claimedHost(t, opts...)
 	return h, dev
 }
 
@@ -96,8 +96,8 @@ func TestProjectColorIsAStableHashOfTheRepoRootOntoThePalette(t *testing.T) {
 	)
 
 	colors := colorsOf(t, dev)
-	if !slices.Contains(host.ProjectColors, colors["main"]) {
-		t.Errorf("Project Color %q is not in the palette %q", colors["main"], host.ProjectColors)
+	if !slices.Contains(palette, colors["main"]) {
+		t.Errorf("Project Color %q is not in the palette %q", colors["main"], palette)
 	}
 	if colors["worktree"] != colors["main"] || colors["subdir"] != colors["main"] {
 		t.Errorf("sessions of one repo got different Project Colors: %v", colors)
@@ -113,11 +113,11 @@ func TestProjectColorIsAStableHashOfTheRepoRootOntoThePalette(t *testing.T) {
 }
 
 func TestPaletteHasAboutEightWellSeparatedHues(t *testing.T) {
-	if n := len(host.ProjectColors); n < 6 || n > 10 {
+	if n := len(palette); n < 6 || n > 10 {
 		t.Fatalf("%d hues, want about 8", n)
 	}
-	for i, a := range host.ProjectColors {
-		for _, b := range host.ProjectColors[i+1:] {
+	for i, a := range palette {
+		for _, b := range palette[i+1:] {
 			if d := hueDistance(t, a, b); d < 25 {
 				t.Errorf("%s and %s are only %.0f° apart", a, b, d)
 			}
@@ -153,7 +153,7 @@ func TestACollisionBumpsTheNewcomerToTheNextFreeHueForItsLifetime(t *testing.T) 
 	)
 
 	colors := colorsOf(t, dev)
-	next := host.ProjectColors[(slices.Index(host.ProjectColors, hashed)+1)%len(host.ProjectColors)]
+	next := palette[(slices.Index(palette, hashed)+1)%len(palette)]
 	if colors["second"] != next {
 		t.Errorf("newcomer got %q, want the next hue %q after its own %q", colors["second"], next, hashed)
 	}
@@ -174,7 +174,7 @@ func TestACollisionBumpsTheNewcomerToTheNextFreeHueForItsLifetime(t *testing.T) 
 func TestACollisionSkipsEveryHueAnActiveSessionHolds(t *testing.T) {
 	first, second := collidingProjects(t)
 	hashed := colorAlone(t, second)
-	next := host.ProjectColors[(slices.Index(host.ProjectColors, hashed)+1)%len(host.ProjectColors)]
+	next := palette[(slices.Index(palette, hashed)+1)%len(palette)]
 	// A project pinned to the next hue holds it too.
 	h, dev := projectColorHost(t, host.WithPinnedProjectColors(map[string]string{"/src/pinned": next}))
 
@@ -185,7 +185,7 @@ func TestACollisionSkipsEveryHueAnActiveSessionHolds(t *testing.T) {
 	)
 
 	colors := colorsOf(t, dev)
-	if colors["second"] == hashed || colors["second"] == next || !slices.Contains(host.ProjectColors, colors["second"]) {
+	if colors["second"] == hashed || colors["second"] == next || !slices.Contains(palette, colors["second"]) {
 		t.Errorf("newcomer got %q; %q and %q are held", colors["second"], hashed, next)
 	}
 }
@@ -205,21 +205,36 @@ func TestAPinnedProjectColorWinsOverTheHash(t *testing.T) {
 
 func TestEveryHueTakenSharesTheHashedOne(t *testing.T) {
 	h, dev := projectColorHost(t)
-	for i := range len(host.ProjectColors) + 1 {
+	for i := range len(palette) + 1 {
 		apply(t, h, host.Event{SessionID: fmt.Sprint(i), State: host.Working, Project: fmt.Sprintf("/src/p%d", i)})
 	}
 
 	colors := colorsOf(t, dev)
 	held := map[string]bool{}
-	for i := range len(host.ProjectColors) {
+	for i := range len(palette) {
 		held[colors[fmt.Sprint(i)]] = true
 	}
-	if len(held) != len(host.ProjectColors) {
-		t.Errorf("the first %d projects got %d hues, want all of them", len(host.ProjectColors), len(held))
+	if len(held) != len(palette) {
+		t.Errorf("the first %d projects got %d hues, want all of them", len(palette), len(held))
 	}
-	last := fmt.Sprintf("/src/p%d", len(host.ProjectColors))
-	if got, want := colors[fmt.Sprint(len(host.ProjectColors))], colorAlone(t, last); got != want {
+	last := fmt.Sprintf("/src/p%d", len(palette))
+	if got, want := colors[fmt.Sprint(len(palette))], colorAlone(t, last); got != want {
 		t.Errorf("with every hue held the newcomer got %q, want its own %q", got, want)
+	}
+}
+
+func TestSessionsWithoutAProjectNeverShareAColor(t *testing.T) {
+	h, dev := projectColorHost(t)
+
+	apply(t, h,
+		host.Event{SessionID: "a", State: host.Working},
+		host.Event{SessionID: "b", State: host.Working},
+		host.Event{SessionID: "c", State: host.Working},
+	)
+
+	colors := colorsOf(t, dev)
+	if colors["a"] == colors["b"] || colors["b"] == colors["c"] || colors["a"] == colors["c"] {
+		t.Errorf("Project Colors %v, want three different ones", colors)
 	}
 }
 

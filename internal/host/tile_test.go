@@ -25,8 +25,9 @@ func tiles(t *testing.T, dev *fakeDevice) map[string]int {
 	return got
 }
 
-// tileHost is a claimed Host for Tile slot tests, and its clock.
-func tileHost(t *testing.T, opts ...host.Option) (*host.Host, *fakeDevice, *fakeClock) {
+// claimedHost is a Host that has claimed a reference fake Device, and its
+// clock.
+func claimedHost(t *testing.T, opts ...host.Option) (*host.Host, *fakeDevice, *fakeClock) {
 	t.Helper()
 	clock := clockAt(1760432400000)
 	dev := newReferenceDevice(t)
@@ -56,7 +57,7 @@ func assertTiles(t *testing.T, dev *fakeDevice, alive []string, want map[string]
 	t.Helper()
 	got := tiles(t, dev)
 	for _, id := range alive {
-		if got[id] != want[id] {
+		if tile, ok := got[id]; !ok || tile != want[id] {
 			t.Errorf("tiles %v, want %v", got, want)
 			return
 		}
@@ -64,7 +65,7 @@ func assertTiles(t *testing.T, dev *fakeDevice, alive []string, want map[string]
 }
 
 func TestWhenTheLayoutShrinksSessionsThatNoLongerFitMoveToFreeTiles(t *testing.T) {
-	h, dev, clock := tileHost(t)
+	h, dev, clock := claimedHost(t)
 	start(t, h, clock, "a", "b", "c") // quadrants: 0 1 2
 
 	sent := len(dev.Received())
@@ -73,12 +74,12 @@ func TestWhenTheLayoutShrinksSessionsThatNoLongerFitMoveToFreeTiles(t *testing.T
 
 	assertMessages(t, since(dev, sent), []string{
 		`{"type":"session_remove","id":"b"}`,
-		`{"type":"session_upsert","id":"c","state":"working","project_color":"#3a86ff","state_entered":1760432403000,"tile":1}`,
+		`{"type":"session_upsert","id":"c","state":"working","project_color":"#ff3030","state_entered":1760432403000,"tile":1}`,
 	})
 }
 
 func TestSessionsThatMoveTakeTheFreeTilesInOrderOfSessionStartTime(t *testing.T) {
-	h, dev, clock := tileHost(t)
+	h, dev, clock := claimedHost(t)
 	start(t, h, clock, "a", "b", "c", "d") // quadrants 0 1 2 3
 	end(t, h, "c")
 	start(t, h, clock, "e") // started after d, takes slot 2
@@ -90,7 +91,7 @@ func TestSessionsThatMoveTakeTheFreeTilesInOrderOfSessionStartTime(t *testing.T)
 }
 
 func TestFiveToEightSessionsKeepTheirTilesAsColumns(t *testing.T) {
-	h, dev, clock := tileHost(t)
+	h, dev, clock := claimedHost(t)
 
 	start(t, h, clock, "a", "b", "c", "d", "e", "f", "g", "h")
 
@@ -102,7 +103,7 @@ func TestFiveToEightSessionsKeepTheirTilesAsColumns(t *testing.T) {
 }
 
 func TestBeyondEightSessionsTheNewestGoToTheOverflowTile(t *testing.T) {
-	h, dev, clock := tileHost(t)
+	h, dev, clock := claimedHost(t)
 	ids := []string{"s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9"}
 	start(t, h, clock, ids...)
 
@@ -129,12 +130,9 @@ func TestBeyondEightSessionsTheNewestGoToTheOverflowTile(t *testing.T) {
 }
 
 func TestAReapedSessionFreesItsTileLikeAnEndedOne(t *testing.T) {
-	clock := clockAt(1760432400000)
-	dev := newReferenceDevice(t)
-	liveness := &fakeLiveness{clock: clock, exits: map[int]time.Time{}}
-	h := host.New(clock, devices(dev), host.WithLivenessProbe(liveness))
-	t.Cleanup(h.Close)
-	h.Tick()
+	liveness := &fakeLiveness{exits: map[int]time.Time{}}
+	h, dev, clock := claimedHost(t, host.WithLivenessProbe(liveness))
+	liveness.clock = clock
 	for i, id := range []string{"a", "b", "c"} {
 		clock.Advance(time.Second)
 		apply(t, h, host.Event{SessionID: id, State: host.Working, PID: 100 + i})

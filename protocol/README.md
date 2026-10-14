@@ -65,7 +65,7 @@ Creates the Agent Session if the id is new, otherwise replaces its fields.
 
 A v0 Device needs `id` (a non-empty string) and a valid `state`. Without a valid `project_color` it uses the Session State's own color; without a valid `tile` the session takes the first free Tile.
 
-The Host's Project Color Allocator picks `project_color`: a pinned color, else a stable hash of the git repo root of the session's project (the directory itself outside a repo; every worktree of a repo shares its root) onto a palette of 8 well-separated hues. When an active session of another project already holds that hue, the newcomer takes the next free one, and keeps it for its lifetime. Sessions of the same project share a color.
+The Host's Project Color Allocator picks `project_color`: a pinned color, else a stable hash of the git repo root of the session's project (the directory itself outside a repo; every worktree of a repo shares its root) onto a palette of 8 well-separated hues. When an active session of another project already holds that hue, the newcomer takes the next free one, and keeps it for its lifetime. Sessions of the same project share a color; a session without a project is a project of its own.
 
 ### `session_remove`
 

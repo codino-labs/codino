@@ -253,20 +253,6 @@ DeviceCore::EscalationStep DeviceCore::escalationStep(Session& session) {
 
 namespace {
 
-// The brightness (of 255) Awaiting Input shows at an Escalation step: each
-// pulse starts at its dimmest when its step starts.
-template <typename Step>
-int awaitingInputLevel(Step step) {
-  switch (step.kind) {
-    case Step::Faster:
-      return kFasterPulse.level(step.elapsed);
-    case Step::Gentle:
-      return kGentlePulse.level(step.elapsed);
-    default:
-      return kSteadyGlow;
-  }
-}
-
 // Tile animations, in the session's Project Color.
 constexpr int kTileIdle = 32;            // a dim, steady glow
 constexpr int kTileWorkingBase = 80;     // Working: a bright row runs down a dimmer Tile
@@ -285,6 +271,19 @@ int tileRoom(size_t n) {
 }
 
 }  // namespace
+
+// The brightness (of 255) Awaiting Input shows at an Escalation step: each
+// pulse starts at its dimmest when its step starts.
+int DeviceCore::awaitingInputLevel(EscalationStep step) {
+  switch (step.kind) {
+    case EscalationStep::Faster:
+      return kFasterPulse.level(step.elapsed);
+    case EscalationStep::Gentle:
+      return kGentlePulse.level(step.elapsed);
+    default:
+      return kSteadyGlow;
+  }
+}
 
 // The whole matrix shows the Aggregate State. Awaiting Input shows the most
 // insistent step any Awaiting Input session has reached: the faster pulse,

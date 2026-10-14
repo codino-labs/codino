@@ -149,6 +149,7 @@ class DeviceCore {
     uint32_t elapsed = 0;
   };
   EscalationStep escalationStep(Session& session);
+  static int awaitingInputLevel(EscalationStep step);
   // A region of the matrix: columns [x0, x1), rows [y0, y1).
   struct Region {
     int x0, y0, x1, y1;

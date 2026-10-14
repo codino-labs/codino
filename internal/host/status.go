@@ -66,8 +66,8 @@ func (h *Host) Status() Status {
 			Firmware: h.device.HelloReply.Firmware,
 			Protocol: h.device.HelloReply.Protocol,
 
-			Themes:      h.deviceHas.themes,
-			SpritePacks: h.deviceHas.spritePacks,
+			Themes:      h.onDevice.themes,
+			SpritePacks: h.onDevice.spritePacks,
 		}
 	} else {
 		st.Device.Problem = h.deviceProblem

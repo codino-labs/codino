@@ -52,9 +52,10 @@ func (c Client) Status(ctx context.Context) (host.Status, error) {
 	return *resp.Status, nil
 }
 
-// Wake is Status from a Host Daemon it spawns when none is running, for a
-// command that needs the Device even when no Agent Session is.
-func (c Client) Wake(ctx context.Context) (host.Status, error) {
+// StatusSpawning is Status from a Host Daemon it spawns when none is
+// running, for a command that needs the Device even when no Agent Session
+// does.
+func (c Client) StatusSpawning(ctx context.Context) (host.Status, error) {
 	resp, err := c.call(ctx, Request{Op: OpStatus}, c.Spawn)
 	if err != nil {
 		return host.Status{}, err
@@ -66,7 +67,7 @@ func (c Client) Wake(ctx context.Context) (host.Status, error) {
 }
 
 // ErrNoDevice means the Host Daemon has no Device claimed to install on.
-var ErrNoDevice = errors.New("no Device connected")
+var ErrNoDevice = host.ErrNoDevice
 
 // InstallTimeout bounds an install or uninstall: the Device writes its
 // flash before it replies.
@@ -79,15 +80,16 @@ func (c Client) Install(ctx context.Context, file []byte) (protocol.InstallReply
 	if _, err := protocol.NewInstall(file); err != nil {
 		return protocol.InstallReply{}, err
 	}
-	return c.install(ctx, Request{Op: OpInstall, Install: file})
+	return c.askDevice(ctx, Request{Op: OpInstall, Install: file})
 }
 
 // Uninstall removes an installed Theme or Sprite Pack from the Device.
 func (c Client) Uninstall(ctx context.Context, kind protocol.Kind, name string) (protocol.InstallReply, error) {
-	return c.install(ctx, Request{Op: OpUninstall, Kind: kind, Name: name})
+	return c.askDevice(ctx, Request{Op: OpUninstall, Kind: kind, Name: name})
 }
 
-func (c Client) install(ctx context.Context, req Request) (protocol.InstallReply, error) {
+// askDevice makes an install or uninstall request.
+func (c Client) askDevice(ctx context.Context, req Request) (protocol.InstallReply, error) {
 	ctx, cancel := context.WithTimeout(ctx, InstallTimeout)
 	defer cancel()
 	resp, err := c.call(ctx, req, c.Spawn)

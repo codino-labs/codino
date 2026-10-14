@@ -12,7 +12,7 @@ endif()
 set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 # Device core: portable C++17, no Arduino or FastLED dependencies.
-add_library(device_core STATIC core/device_core.cpp core/theme.cpp core/builtin_themes.cpp)
+add_library(device_core STATIC core/device_core.cpp core/device_core_themes.cpp core/theme.cpp core/builtin_themes.cpp)
 target_include_directories(device_core PUBLIC core)
 target_include_directories(device_core SYSTEM PUBLIC third_party)
 

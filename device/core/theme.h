@@ -73,9 +73,6 @@ struct Theme {
   std::array<ThemeState, kSessionStateCount> states;
 
   const ThemeState& operator[](SessionState s) const { return states[stateIndex(s)]; }
-  // A Character Theme: some Session State is a Sprite Pack pose, which needs
-  // the full matrix.
-  bool isCharacter() const;
 };
 
 // Pixel-art frames, each `width` x `height` palette indices (row-major from
@@ -113,16 +110,28 @@ bool parseColor(std::string_view text, Rgb& color);
 // `color` at `level` of its full brightness (255 = unchanged).
 Rgb scaled(Rgb color, int level);
 
-// The Themes and Sprite Packs built into the firmware, as JSON in the format
+// What a Device can install: a Theme, or a Sprite Pack a Theme draws from.
+enum class InstallKind { Theme, SpritePack };
+// "theme" or "sprite_pack", as in an `install` message.
+const char* wireName(InstallKind kind);
+// False when `name` is no kind's wire name.
+bool parseInstallKind(std::string_view name, InstallKind& kind);
+
+// The Themes or Sprite Packs built into the firmware, as JSON in the format
 // of an `install` message (protocol/themes.md).
 struct BuiltIn {
   const char* name;
   const char* json;
 };
-extern const BuiltIn kBuiltInThemes[];
-extern const size_t kBuiltInThemeCount;
-extern const BuiltIn kBuiltInSpritePacks[];
-extern const size_t kBuiltInSpritePackCount;
+struct BuiltIns {
+  const BuiltIn* first;
+  size_t count;
+  const BuiltIn* begin() const { return first; }
+  const BuiltIn* end() const { return first + count; }
+};
+BuiltIns builtIns(InstallKind kind);
+// The built-in one of that name; null when there is none.
+const BuiltIn* findBuiltIn(InstallKind kind, std::string_view name);
 // The default Character Theme, and the abstract Theme whose effects Tiles
 // fall back to when the selected Theme is a Character Theme.
 constexpr const char* kDefaultTheme = "default";

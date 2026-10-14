@@ -152,3 +152,24 @@ func TestADeviceThatNeverAnswersAnInstallFailsWhenTheCallerStopsWaiting(t *testi
 		t.Errorf("got %v, want no reply", err)
 	}
 }
+
+func TestALateReplyToAnEarlierInstallIsNotTakenForTheAnswer(t *testing.T) {
+	h, _ := claimedDevice(t, func(line string) string {
+		// The reply to an earlier install the Host stopped waiting for
+		// arrives first, then the answer.
+		return `{"type":"install_reply","kind":"sprite_pack","name":"dots","ok":false,"error":"late","themes":["default","minimal"],"sprite_packs":["nino"]}` +
+			"\n" + fixture(t, "install-reply.jsonl")
+	})
+
+	reply, err := h.Install(context.Background(), installOf(t, "install-theme.jsonl"))
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reply.OK || reply.Kind != protocol.KindTheme || reply.Name != "ember" {
+		t.Errorf("reply %+v, want the one for theme ember", reply)
+	}
+	if got := h.Status().Device.Themes; !reflect.DeepEqual(got, []string{"default", "minimal", "ember"}) {
+		t.Errorf("themes %q", got)
+	}
+}

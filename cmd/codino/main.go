@@ -27,7 +27,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"slices"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -113,7 +112,7 @@ func main() {
 	case "get":
 		err = get(args, os.Stdout)
 	case "set":
-		err = set(args, os.Stdout)
+		err = set(paths, args, os.Stdout)
 	case "unset":
 		err = unset(args)
 	case "status":
@@ -270,8 +269,8 @@ func printStatus(out io.Writer, st host.Status, now time.Time) {
 	default:
 		fmt.Fprintln(out, "Device: not connected")
 	}
-	if d := st.Device; d.Claimed && len(d.Themes) > 0 && !slices.Contains(d.Themes, st.Theme) {
-		fmt.Fprintf(out, "Theme: %s is not on the Device, which shows \"default\" (codino theme list)\n", st.Theme)
+	if missing := themeMissing(st); missing != "" {
+		fmt.Fprintln(out, missing)
 	}
 	if st.Showing {
 		fmt.Fprintln(out, "Raw Mode: showing a picture (codino show)")

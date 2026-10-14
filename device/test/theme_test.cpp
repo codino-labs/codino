@@ -385,6 +385,8 @@ TEST_CASE("an install the Device can't use is refused with the reason, and nothi
        "either"},
       {"level out of range", themeWithEveryState("x", R"({"palette":["#ffffff"],"effect":{"name":"steady","level":300}})"),
        "level"},
+      {"level and high", themeWithEveryState("x", R"({"palette":["#ffffff"],"effect":{"name":"blink","level":9,"high":9}})"),
+       "not both"},
       {"sprite frame too fast",
        themeWithEveryState("x", R"({"palette":["#ffffff"],"sprite":{"pack":"p","frames":["a"],"frame_ms":5}})"),
        "frame_ms"},
@@ -464,13 +466,20 @@ TEST_CASE("an install counts as hearing from the Host") {
   CHECK(isPose(core.render()));
 }
 
-TEST_CASE("a line longer than a Device's line buffer is ignored") {
+TEST_CASE("a line that doesn't fit a Device's line buffer, newline included, is ignored") {
+  // The sprite pack fixture padded to `length` bytes without its newline.
+  auto padded = [](size_t length) {
+    std::string line = fixture("install-sprite-pack.jsonl");
+    const std::string field = R"(,"padding":"")";
+    line.insert(line.size() - 1, R"(,"padding":")" + std::string(length - line.size() - field.size(), 'x') + "\"");
+    REQUIRE(line.size() == length);
+    return line;
+  };
   FakeClock clock;
   device::DeviceCore core(profile8x8(), "0.1.0", clock);
-  std::string line = fixture("install-sprite-pack.jsonl");
-  line.insert(line.size() - 1, R"(,"padding":")" + std::string(device::DeviceCore::kMaxLineLength, 'x') + "\"");
 
-  CHECK(core.receive(line).empty());
+  CHECK(core.receive(padded(device::DeviceCore::kMaxLineLength)).empty());
+  CHECK_FALSE(core.receive(padded(device::DeviceCore::kMaxLineLength - 1)).empty());
 }
 
 // --- Procedural effects -------------------------------------------------------

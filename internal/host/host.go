@@ -72,8 +72,8 @@ type Host struct {
 
 	// installMu keeps installs one at a time: each waits for its reply.
 	installMu sync.Mutex
-	// deviceHas is what the claimed Device has installed.
-	deviceHas has
+	// onDevice is what the claimed Device has installed.
+	onDevice installedOn
 }
 
 // TranscriptProbe reads an Agent's transcript for what no hook reports.
@@ -375,7 +375,7 @@ func (h *Host) claim() {
 	}
 	slog.Info("Device claimed", "device", dev.Name, "firmware", dev.HelloReply.Firmware)
 	h.device = dev
-	h.deviceHas = hasOf(dev)
+	h.onDevice = installedOnDevice(dev)
 	h.deviceProblem = ""
 	h.lastFailedClaim = time.Time{}
 	h.lastHeartbeat = now // hello counts as one

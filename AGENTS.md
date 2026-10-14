@@ -112,7 +112,8 @@ cd "$(mktemp -d)" && claude --plugin-dir ~/code/claudino/plugin   # or: -p "say 
 ```
 device/
   core/              Device core: protocol messages + Clock in, PixelBuffer out
-                     (theme.*: the Theme interpreter; builtin_themes.cpp: the built-in Themes as data)
+                     (theme.*: the Theme interpreter; device_core_themes.cpp: install, uninstall, selecting;
+                     builtin_themes.cpp: the built-in Themes as data)
   test/              native Device core tests (doctest); golden/: Theme snapshot golden frames
   virtual/terminal/  terminal Virtual Device (stdin/stdout protocol, matrix on stderr)
   third_party/       vendored single headers (ArduinoJson, doctest), see its README

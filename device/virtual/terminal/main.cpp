@@ -234,7 +234,7 @@ class DirectoryThemeStore : public device::ThemeStore {
 
  private:
   std::string folder(device::InstallKind kind) const {
-    return dir_ + (kind == device::InstallKind::Theme ? "/theme" : "/sprite_pack");
+    return dir_ + "/" + device::wireName(kind);
   }
   std::string path(device::InstallKind kind, std::string_view name) const {
     return folder(kind) + "/" + std::string(name) + ".jsonl";

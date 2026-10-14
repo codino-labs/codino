@@ -141,7 +141,7 @@ func handshake(c Candidate, now time.Time) (*Device, error) {
 	}
 
 	dev := &Device{Name: c.Name, HelloReply: reply, port: port, gone: make(chan struct{}), acknowledged: make(chan struct{}, 1),
-		installed: make(chan protocol.InstallReply, 1)}
+		installed: make(chan protocol.InstallReply, installRepliesQueued)}
 	go dev.drain(lines)
 	return dev, nil
 }
@@ -163,10 +163,9 @@ func (d *Device) drain(lines *bufio.Reader) {
 		}
 		if reply, err := protocol.DecodeInstallReply(line); err == nil {
 			select {
-			case <-d.installed: // nobody waited for the previous one
-			default:
+			case d.installed <- reply:
+			default: // nobody is waiting for that many: drop it
 			}
-			d.installed <- reply
 		}
 	}
 }
@@ -175,8 +174,13 @@ func (d *Device) drain(lines *bufio.Reader) {
 // press or a double tap), for every session.
 func (d *Device) Acknowledged() <-chan struct{} { return d.acknowledged }
 
+// installRepliesQueued is how many install replies wait to be received:
+// the answer to an install, and late answers to earlier ones.
+const installRepliesQueued = 4
+
 // InstallReplies receives the Device's answer to each install and
-// uninstall. Only the latest one waits to be received.
+// uninstall, in order; beyond installRepliesQueued unreceived, newer ones
+// are dropped.
 func (d *Device) InstallReplies() <-chan protocol.InstallReply { return d.installed }
 
 // WriteTimeout bounds one write to a Device that stopped reading, on

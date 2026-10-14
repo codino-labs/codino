@@ -100,9 +100,6 @@ class PreferencesCache {
   virtual void save(std::string_view line) = 0;
 };
 
-// What a Device can install: a Theme, or a Sprite Pack a Theme draws from.
-enum class InstallKind { Theme, SpritePack };
-
 // Where the firmware shell keeps installed Themes and Sprite Packs across
 // reboots (flash on a Device, a directory on the terminal Virtual Device).
 // Each is one `install` protocol line under its kind and name. The Device core
@@ -145,8 +142,8 @@ class DeviceCore {
              Preferences preferences = {}, PreferencesCache* cache = nullptr, ThemeStore* store = nullptr);
 
   static constexpr size_t kMaxInstalled = 8;
-  // The longest protocol line a Device takes: an `install` with a Sprite
-  // Pack is the longest message.
+  // The longest protocol line a Device takes, its newline included: an
+  // `install` with a Sprite Pack is the longest message.
   static constexpr size_t kMaxLineLength = 8192;
 
   // The Preferences the Device renders by.

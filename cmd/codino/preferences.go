@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/codino-labs/codino/internal/daemon"
 	"github.com/codino-labs/codino/internal/gitrepo"
 	"github.com/codino-labs/codino/internal/preferences"
 )
@@ -116,7 +118,7 @@ func get(args []string, out io.Writer) error {
 }
 
 // set changes one Preference in the config file.
-func set(args []string, out io.Writer) error {
+func set(paths daemon.Paths, args []string, out io.Writer) error {
 	f, args, err := preferencesCommand("set", args, 2, 2, "KEY and VALUE")
 	if err != nil {
 		return err
@@ -129,6 +131,15 @@ func set(args []string, out io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(out, "%s = %s (in %s)\n", args[0], v, f.Path)
+	if args[0] == "theme" {
+		// Tell now if the Device can't show it, when a Host Daemon knows.
+		if st, err := (daemon.Client{Paths: paths}).Status(context.Background()); err == nil {
+			st.Theme = v
+			if missing := themeMissing(st); missing != "" {
+				fmt.Fprintln(out, missing)
+			}
+		}
+	}
 	return nil
 }
 

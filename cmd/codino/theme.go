@@ -42,6 +42,26 @@ func theme(paths daemon.Paths, args []string, out io.Writer) error {
 	}
 }
 
+// withDevice calls do until it no longer fails with daemon.ErrNoDevice, for
+// up to deviceWait: a Host Daemon just spawned hasn't claimed the Device yet.
+// It then explains why no Device is connected, if none is.
+func withDevice(client daemon.Client, do func() error) error {
+	deadline := time.Now().Add(deviceWait)
+	for {
+		err := do()
+		if !errors.Is(err, daemon.ErrNoDevice) {
+			return err
+		}
+		if time.Now().After(deadline) {
+			if st, serr := client.Status(context.Background()); serr == nil && st.Device.Problem != "" {
+				return fmt.Errorf("%w: %s", err, st.Device.Problem)
+			}
+			return err
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
 func themeList(client daemon.Client, args []string, out io.Writer) error {
 	fs := newFlags("theme list")
 	if err := fs.Parse(args); err != nil {
@@ -51,21 +71,17 @@ func themeList(client daemon.Client, args []string, out io.Writer) error {
 		fmt.Fprintf(os.Stderr, "%s theme list: takes no arguments\n%s", name, usage)
 		return errUsage
 	}
-	deadline := time.Now().Add(deviceWait)
-	for {
-		st, err := client.Wake(context.Background())
+	return withDevice(client, func() error {
+		st, err := client.StatusSpawning(context.Background())
 		if err != nil {
 			return err
 		}
-		if st.Device.Claimed {
-			printThemes(out, st)
-			return nil
+		if !st.Device.Claimed {
+			return daemon.ErrNoDevice
 		}
-		if time.Now().After(deadline) {
-			return noDevice(st)
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
+		printThemes(out, st)
+		return nil
+	})
 }
 
 func printThemes(out io.Writer, st host.Status) {
@@ -77,34 +93,20 @@ func printThemes(out io.Writer, st host.Status) {
 		}
 		fmt.Fprintf(out, "%s %s\n", mark, t)
 	}
-	if !slices.Contains(st.Device.Themes, st.Theme) {
-		fmt.Fprintf(out, "theme = %s is not on the Device: it shows %q instead.\n", st.Theme, "default")
+	if missing := themeMissing(st); missing != "" {
+		fmt.Fprintln(out, missing)
 	}
 	fmt.Fprintf(out, "Sprite Packs: %s\n", strings.Join(st.Device.SpritePacks, ", "))
 }
 
-func noDevice(st host.Status) error {
-	if st.Device.Problem != "" {
-		return fmt.Errorf("no Device connected: %s", st.Device.Problem)
+// themeMissing warns when the theme Preference names a Theme the claimed
+// Device doesn't have; empty otherwise.
+func themeMissing(st host.Status) string {
+	d := st.Device
+	if !d.Claimed || len(d.Themes) == 0 || slices.Contains(d.Themes, st.Theme) {
+		return ""
 	}
-	return errors.New("no Device connected")
-}
-
-// untilClaimed retries an install while the Host Daemon has no Device yet.
-func untilClaimed(client daemon.Client, do func() (protocol.InstallReply, error)) (protocol.InstallReply, error) {
-	deadline := time.Now().Add(deviceWait)
-	for {
-		reply, err := do()
-		if !errors.Is(err, daemon.ErrNoDevice) || time.Now().After(deadline) {
-			if errors.Is(err, daemon.ErrNoDevice) {
-				if st, serr := client.Status(context.Background()); serr == nil {
-					return reply, noDevice(st)
-				}
-			}
-			return reply, err
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
+	return fmt.Sprintf("Theme: %s is not on the Device, which shows \"default\" (codino theme list)", st.Theme)
 }
 
 func themeInstall(client daemon.Client, args []string, out io.Writer) error {
@@ -121,22 +123,24 @@ func themeInstall(client daemon.Client, args []string, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("theme install: %w", err)
 	}
-	install, err := protocol.NewInstall(data)
-	if err != nil {
+	var reply protocol.InstallReply
+	err = withDevice(client, func() (err error) {
+		reply, err = client.Install(context.Background(), data)
+		return err
+	})
+	var invalid *protocol.InvalidInstallError
+	if errors.As(err, &invalid) {
 		return fmt.Errorf("%s: %w", file, err)
 	}
-	reply, err := untilClaimed(client, func() (protocol.InstallReply, error) {
-		return client.Install(context.Background(), data)
-	})
 	if err != nil {
 		return err
 	}
 	if !reply.OK {
-		return fmt.Errorf("the Device refused %s %s: %s", kindName(install.Kind), install.Name, reply.Error)
+		return fmt.Errorf("the Device refused %s %s: %s", kindName(reply.Kind), reply.Name, reply.Error)
 	}
-	fmt.Fprintf(out, "Installed %s %s.\n", kindName(install.Kind), install.Name)
-	if install.Kind == protocol.KindTheme {
-		fmt.Fprintf(out, "Show it with: codino set theme %s\n", install.Name)
+	fmt.Fprintf(out, "Installed %s %s.\n", kindName(reply.Kind), reply.Name)
+	if reply.Kind == protocol.KindTheme {
+		fmt.Fprintf(out, "Show it with: codino set theme %s\n", reply.Name)
 	}
 	return nil
 }
@@ -155,8 +159,10 @@ func themeUninstall(client daemon.Client, args []string, out io.Writer) error {
 	if *spritePack {
 		kind = protocol.KindSpritePack
 	}
-	reply, err := untilClaimed(client, func() (protocol.InstallReply, error) {
-		return client.Uninstall(context.Background(), kind, fs.Arg(0))
+	var reply protocol.InstallReply
+	err := withDevice(client, func() (err error) {
+		reply, err = client.Uninstall(context.Background(), kind, fs.Arg(0))
+		return err
 	})
 	if err != nil {
 		return err

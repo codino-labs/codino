@@ -62,6 +62,8 @@ bool parseEffect(JsonVariantConst object, Effect& effect, std::string& error, co
       !optionalInt(object, "high", 0, 255, effect.high, error, where) ||
       !optionalInt(object, "level", 0, 255, effect.high, error, where))
     return false;
+  if (!object["level"].isNull() && !object["high"].isNull())
+    return fail(error, where + ": give level or high, not both");
   JsonVariantConst direction = object["direction"];
   if (!direction.isNull()) {
     const DirectionName* d = nullptr;
@@ -127,6 +129,17 @@ int breathe(uint32_t t, uint32_t period, int low, int high) {
 
 }  // namespace
 
+const char* wireName(InstallKind kind) { return kind == InstallKind::Theme ? "theme" : "sprite_pack"; }
+
+bool parseInstallKind(std::string_view name, InstallKind& kind) {
+  for (InstallKind k : {InstallKind::Theme, InstallKind::SpritePack})
+    if (name == wireName(k)) {
+      kind = k;
+      return true;
+    }
+  return false;
+}
+
 bool parseColor(std::string_view text, Rgb& color) {
   if (text.size() != 7 || text[0] != '#') return false;
   int channels[3];
@@ -159,10 +172,6 @@ bool isValidName(std::string_view name) {
   return std::all_of(name.begin(), name.end(), [](char c) {
     return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
   });
-}
-
-bool Theme::isCharacter() const {
-  return std::any_of(states.begin(), states.end(), [](const ThemeState& s) { return s.usesSprite; });
 }
 
 bool parseTheme(JsonVariantConst message, Theme& theme, std::string& error) {

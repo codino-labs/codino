@@ -35,28 +35,39 @@ type Install struct {
 	line []byte
 }
 
+// InvalidInstallError is why a file can't be installed: it is no Theme or
+// Sprite Pack, or too long for a Device's line.
+type InvalidInstallError struct{ Reason string }
+
+func (e *InvalidInstallError) Error() string { return e.Reason }
+
+func invalid(format string, args ...any) error {
+	return &InvalidInstallError{Reason: fmt.Sprintf(format, args...)}
+}
+
 // NewInstall makes the install message of a Theme or Sprite Pack file: a
 // JSON object with a kind ("theme" or "sprite_pack") and a name. It fails
-// on a file that can't be one, or that is too long for a Device's line.
+// with an *InvalidInstallError on a file that can't be one, or that is too
+// long for a Device's line.
 func NewInstall(file []byte) (Install, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(file, &fields); err != nil {
 		var syntax *json.SyntaxError
 		if errors.As(err, &syntax) {
-			return Install{}, fmt.Errorf("not JSON: %w", err)
+			return Install{}, invalid("not JSON: %v", err)
 		}
-		return Install{}, errors.New("want a JSON object")
+		return Install{}, invalid("want a JSON object")
 	}
 	if fields == nil {
-		return Install{}, errors.New("want a JSON object")
+		return Install{}, invalid("want a JSON object")
 	}
 	var kind Kind
 	if json.Unmarshal(fields["kind"], &kind) != nil || (kind != KindTheme && kind != KindSpritePack) {
-		return Install{}, errors.New(`kind must be "theme" or "sprite_pack"`)
+		return Install{}, invalid(`kind must be "theme" or "sprite_pack"`)
 	}
 	var name string
 	if json.Unmarshal(fields["name"], &name) != nil || !ValidName(name) {
-		return Install{}, errors.New("name must be 1-32 of a-z, 0-9, - and _")
+		return Install{}, invalid("name must be 1-32 of a-z, 0-9, - and _")
 	}
 	fields["type"] = json.RawMessage(`"install"`)
 	line, err := json.Marshal(fields) // compact, so one line
@@ -65,7 +76,7 @@ func NewInstall(file []byte) (Install, error) {
 	}
 	line = append(line, '\n')
 	if len(line) > MaxLine {
-		return Install{}, fmt.Errorf("%d bytes as a protocol line: a Device takes at most %d", len(line), MaxLine)
+		return Install{}, invalid("%d bytes as a protocol line: a Device takes at most %d", len(line), MaxLine)
 	}
 	return Install{Kind: kind, Name: name, line: line}, nil
 }
@@ -78,6 +89,7 @@ type Uninstall struct {
 	Name string `json:"name"`
 }
 
+// NewUninstall fills in the message type.
 func NewUninstall(kind Kind, name string) Uninstall {
 	return Uninstall{Type: "uninstall", Kind: kind, Name: name}
 }

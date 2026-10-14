@@ -147,11 +147,20 @@ constexpr const char* kNino = R"json({
   }
 })json";
 
+constexpr BuiltIn kThemes[] = {{kDefaultTheme, kDefault}, {kAbstractTheme, kMinimal}};
+constexpr BuiltIn kSpritePacks[] = {{"nino", kNino}};
+
 }  // namespace
 
-const BuiltIn kBuiltInThemes[] = {{kDefaultTheme, kDefault}, {kAbstractTheme, kMinimal}};
-const size_t kBuiltInThemeCount = sizeof kBuiltInThemes / sizeof kBuiltInThemes[0];
-const BuiltIn kBuiltInSpritePacks[] = {{"nino", kNino}};
-const size_t kBuiltInSpritePackCount = sizeof kBuiltInSpritePacks / sizeof kBuiltInSpritePacks[0];
+BuiltIns builtIns(InstallKind kind) {
+  if (kind == InstallKind::Theme) return {kThemes, sizeof kThemes / sizeof kThemes[0]};
+  return {kSpritePacks, sizeof kSpritePacks / sizeof kSpritePacks[0]};
+}
+
+const BuiltIn* findBuiltIn(InstallKind kind, std::string_view name) {
+  for (const BuiltIn& b : builtIns(kind))
+    if (name == b.name) return &b;
+  return nullptr;
+}
 
 }  // namespace device

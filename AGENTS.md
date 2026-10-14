@@ -25,6 +25,38 @@ test -z "$(gofmt -l .)" && go vet ./... && go test -race ./...
 
 `-race` matters: the daemon serves many hook connections and one serial port concurrently.
 
+## Protocol
+
+`protocol/README.md` is the wire protocol spec (currently v0); `protocol/fixtures/` holds one example `.jsonl` per message kind. Both sides test against the fixtures: Host tests produce them, Device tests accept them. A protocol change updates the spec and the fixtures in the same commit.
+
+## Device (C++)
+
+```
+device/
+  core/              Device core: protocol messages + Clock in, PixelBuffer out
+  test/              native Device core tests (doctest)
+  virtual/terminal/  terminal Virtual Device (stdin/stdout protocol, matrix on stderr)
+  third_party/       vendored single headers (ArduinoJson, doctest), see its README
+```
+
+- **The Device core stays portable.** C++17 and the standard library plus ArduinoJson only: no Arduino core, FastLED or OS calls, because the same code builds for the firmware, the terminal and the browser. Hardware, time and I/O come in through the constructor (`HardwareProfile`, `Clock`) or `receive()`.
+- **Test at the seam.** Feed protocol lines (prefer the fixtures) and fake clock ticks; assert on `render()`'s pixel buffer with semantic checks ("the whole matrix is one lit color", "same frame as a lone Awaiting Input session"), not golden frames or private state. No test sleeps.
+- **Names** follow `CONTEXT.md` (`SessionState::AwaitingInput`, `aggregateState`, `HardwareProfile`). The product name stays out of identifiers: the namespace is `device`.
+
+A change is done when this exits 0 (needs `cmake` and a C++17 compiler):
+
+```sh
+make -C device test
+```
+
+Run a single test with `device/build/device_core_test -tc="*Aggregate State*"`.
+
+Demo: pipe the fixtures into the terminal Virtual Device. The matrix goes dark → Awaiting Input → dark:
+
+```sh
+make -C device && cat protocol/fixtures/{hello,session-upsert,heartbeat,session-remove}.jsonl | device/build/virtual-device
+```
+
 ## Agent skills
 
 ### Issue tracker

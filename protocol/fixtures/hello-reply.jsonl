@@ -1,0 +1,1 @@
+{"type":"hello_reply","protocol":0,"firmware":"0.1.0","hardware_profile":{"width":8,"height":8,"data_pin":14,"serpentine":false,"color_order":"RGB","brightness_cap":48,"current_cap_ma":300,"button":false,"imu":true}}

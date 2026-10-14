@@ -100,7 +100,12 @@ func (h *Host) mirrorMessage(w *Watcher, msg any) {
 		slog.Warn("encode for a Watcher", "err", err)
 		return
 	}
-	h.mirror(w, Mirrored{Line: bytes.TrimSuffix(line, []byte("\n"))})
+	h.mirror(w, mirroredLine(line))
+}
+
+// mirroredLine is a protocol line, newline included, as a Watcher sees it.
+func mirroredLine(line []byte) Mirrored {
+	return Mirrored{Line: bytes.TrimSuffix(line, []byte("\n"))}
 }
 
 // mirror hands m to w, closing a Watcher that fell too far behind. Callers
@@ -121,7 +126,7 @@ func (h *Host) mirror(w *Watcher, m Mirrored) {
 // h.mu.
 func (h *Host) mirrorLine(line []byte) {
 	for w := range h.watchers {
-		h.mirror(w, Mirrored{Line: bytes.TrimSuffix(line, []byte("\n"))})
+		h.mirror(w, mirroredLine(line))
 	}
 }
 

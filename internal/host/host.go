@@ -422,10 +422,9 @@ func (h *Host) greeting() (msgs []any, frame int) {
 		}
 	}
 	frame = -1
-	if size, ok := h.matrix(); h.showing != nil && ok {
-		frames := h.showing.framesFor(size)
-		frame = frameAt(frames, h.clock.Now().Sub(h.showing.start))
-		msgs = append(msgs, protocol.NewRawModeEnter(), protocol.NewRawFrame(frames[frame].RGB))
+	if i, raw, ok := h.showFrame(); ok {
+		frame = i
+		msgs = append(msgs, protocol.NewRawModeEnter(), raw)
 	}
 	if h.preview != nil {
 		msgs = append(msgs, h.previewEnter())

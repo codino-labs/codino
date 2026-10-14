@@ -20,9 +20,9 @@ import (
 type Launcher struct {
 	Host        *host.Host
 	Preferences Preferences
-	// ConfigFile is where the Preferences are, for the page to say.
-	ConfigFile string
-	Clock      host.Clock
+	// PreferencesFile is where the Preferences are, for the page to say.
+	PreferencesFile string
+	Clock           host.Clock
 
 	mu      sync.Mutex
 	running *running
@@ -39,16 +39,14 @@ type running struct {
 // sweepInterval is how often a running UI checks that its page is there.
 const sweepInterval = time.Second
 
-// ErrClosed means the Launcher closed: the Host Daemon is exiting.
-var ErrClosed = errors.New("the Host Daemon is exiting")
-
 // Open returns a URL that opens the page, starting the web UI unless it
-// runs. It fails with host.ErrRetired once the Host has retired.
+// runs. It fails with host.ErrRetired once the Host has retired or the
+// Launcher closed.
 func (l *Launcher) Open() (string, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.closed {
-		return "", ErrClosed
+		return "", host.ErrRetired // the Host Daemon is exiting
 	}
 	if l.running == nil {
 		r, err := l.start()
@@ -71,8 +69,8 @@ func (l *Launcher) start() (*running, error) {
 		hold.Release()
 		return nil, fmt.Errorf("web UI: %w", err)
 	}
-	server := NewServer(Config{Host: l.Host, Preferences: l.Preferences, Clock: l.Clock, Addr: ln.Addr().String(),
-		ConfigFile: l.ConfigFile})
+	server := NewServer(Options{Host: l.Host, Preferences: l.Preferences, Clock: l.Clock, Addr: ln.Addr().String(),
+		PreferencesFile: l.PreferencesFile})
 	r := &running{server: server, hold: hold, done: make(chan struct{}),
 		http: &http.Server{Handler: server, ReadHeaderTimeout: 5 * time.Second}}
 	go func() {
@@ -98,21 +96,22 @@ func (l *Launcher) sweepUntil(done <-chan struct{}) {
 	}
 }
 
-// Sweep stops the web UI once its page has gone.
+// Sweep stops the web UI once its page has gone. It holds l.mu meanwhile, so
+// an Open waits for the old UI to end its preview before starting anew.
 func (l *Launcher) Sweep() {
 	l.mu.Lock()
+	defer l.mu.Unlock()
 	r := l.running
 	if r == nil || !r.server.Expired() {
-		l.mu.Unlock()
 		return
 	}
 	l.running = nil
-	l.mu.Unlock()
 	slog.Info("web UI closed: the page has gone")
 	l.stop(r)
 }
 
-// stop shuts r down, ends the preview and releases the Host Daemon.
+// stop shuts r down, ends the preview and releases the Host Daemon. Callers
+// hold l.mu.
 func (l *Launcher) stop(r *running) {
 	close(r.done)
 	r.server.Stop()
@@ -128,11 +127,10 @@ func (l *Launcher) stop(r *running) {
 // Close stops the web UI, if it runs, and opens no other.
 func (l *Launcher) Close() {
 	l.mu.Lock()
-	r := l.running
-	l.running = nil
+	defer l.mu.Unlock()
 	l.closed = true
-	l.mu.Unlock()
-	if r != nil {
+	if r := l.running; r != nil {
+		l.running = nil
 		l.stop(r)
 	}
 }

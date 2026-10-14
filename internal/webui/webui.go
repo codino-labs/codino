@@ -6,9 +6,11 @@
 // The preview gets the protocol stream the Device gets (host.Watcher) as
 // Server-Sent Events; the page acts through JSON POSTs. Only the human who
 // ran `codino ui` gets in: the URL it opens carries a one-time ticket that
-// the page swaps for a cookie, every request must name the server's own
-// address as Host (no DNS rebinding), and a POST must come from the page's
-// own origin as JSON (no cross-site request).
+// /open swaps for the page's address, under a secret key (/KEY/), so the
+// key is never on a command line other local users can read and never goes
+// to another server on 127.0.0.1, as a cookie would. Every request must name
+// the server's own address as Host (no DNS rebinding), and a POST must come
+// from the page's own origin as JSON (no cross-site request).
 package webui
 
 import (
@@ -23,6 +25,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -50,16 +53,16 @@ type Preferences interface {
 	Unset(key string) error
 }
 
-// Config is what a Server serves.
-type Config struct {
+// Options are what a Server serves.
+type Options struct {
 	Host        Host
 	Preferences Preferences
 	Clock       host.Clock
 	// Addr is the host:port the Server listens on: the only Host a request
 	// may name.
 	Addr string
-	// ConfigFile is where the Preferences are, for the page to say.
-	ConfigFile string
+	// PreferencesFile is where the Preferences are, for the page to say.
+	PreferencesFile string
 }
 
 // KeepAlive is how long the UI stays open after the page's last heartbeat
@@ -74,13 +77,10 @@ const FirstVisitWait = 2 * time.Minute
 // page is noticed.
 const streamKeepAlive = 15 * time.Second
 
-// cookieName holds the key the page gets for its ticket.
-const cookieName = "ui_key"
-
 // Server is the web UI's HTTP handler. It is open while the page heartbeats
 // or holds its stream open, and for FirstVisitWait after each OpenURL.
 type Server struct {
-	cfg  Config
+	opts Options
 	key  string
 	mux  *http.ServeMux
 	done chan struct{}
@@ -94,10 +94,10 @@ type Server struct {
 	streams   int
 }
 
-// NewServer returns the web UI for cfg.
-func NewServer(cfg Config) *Server {
-	s := &Server{cfg: cfg, key: randomHex(), done: make(chan struct{}), tickets: map[string]time.Time{},
-		openUntil: cfg.Clock.Now().Add(FirstVisitWait)}
+// NewServer returns the web UI for opts.
+func NewServer(opts Options) *Server {
+	s := &Server{opts: opts, key: randomHex(), done: make(chan struct{}), tickets: map[string]time.Time{},
+		openUntil: opts.Clock.Now().Add(FirstVisitWait)}
 	page, err := fs.Sub(assets, "assets")
 	if err != nil {
 		panic(err) // embedded at build time
@@ -124,7 +124,7 @@ func (s *Server) OpenURL() string {
 	ticket := randomHex()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	now := s.cfg.Clock.Now()
+	now := s.opts.Clock.Now()
 	for t, lapse := range s.tickets {
 		if !now.Before(lapse) {
 			delete(s.tickets, t)
@@ -132,7 +132,7 @@ func (s *Server) OpenURL() string {
 	}
 	s.tickets[ticket] = now.Add(FirstVisitWait)
 	s.extend(now.Add(FirstVisitWait))
-	return "http://" + s.cfg.Addr + "/open?ticket=" + ticket
+	return "http://" + s.opts.Addr + "/open?ticket=" + ticket
 }
 
 // extend keeps the UI open until at least t. Callers hold s.mu.
@@ -147,14 +147,7 @@ func (s *Server) extend(t time.Time) {
 func (s *Server) Expired() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.streams == 0 && !s.cfg.Clock.Now().Before(s.openUntil)
-}
-
-// Streams is how many pages hold the stream open.
-func (s *Server) Streams() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.streams
+	return s.streams == 0 && !s.opts.Clock.Now().Before(s.openUntil)
 }
 
 // Stop ends every stream, so the HTTP server can shut down.
@@ -168,7 +161,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; "+
 		"style-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
-	if r.Host != s.cfg.Addr {
+	if r.Host != s.opts.Addr {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -176,7 +169,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.open(w, r)
 		return
 	}
-	if !s.hasKey(r) {
+	rest, ok := s.underKey(r.URL.Path)
+	if !ok {
 		http.Error(w, "forbidden: run codino ui to open the page", http.StatusForbidden)
 		return
 	}
@@ -184,34 +178,40 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	s.mux.ServeHTTP(w, r)
+	r2 := r.Clone(r.Context())
+	r2.URL.Path = rest
+	r2.URL.RawPath = ""
+	s.mux.ServeHTTP(w, r2)
 }
 
-// open swaps an unused ticket for the cookie and sends the browser to the
-// page, so the URL left in the browser's history and command line is spent.
+// open swaps an unused ticket for the page's address, so the URL left in
+// the browser's command line is spent.
 func (s *Server) open(w http.ResponseWriter, r *http.Request) {
 	ticket := r.URL.Query().Get("ticket")
 	s.mu.Lock()
 	lapse, ok := s.tickets[ticket]
 	delete(s.tickets, ticket)
 	s.mu.Unlock()
-	if !ok || !s.cfg.Clock.Now().Before(lapse) {
+	if !ok || !s.opts.Clock.Now().Before(lapse) {
 		http.Error(w, "forbidden: this link was used already; run codino ui again", http.StatusForbidden)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: s.key, Path: "/", HttpOnly: true,
-		SameSite: http.SameSiteStrictMode})
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, "/"+s.key+"/", http.StatusSeeOther)
 }
 
-func (s *Server) hasKey(r *http.Request) bool {
-	c, err := r.Cookie(cookieName)
-	return err == nil && subtle.ConstantTimeCompare([]byte(c.Value), []byte(s.key)) == 1
+// underKey returns the path below /KEY/, and whether path is under it.
+func (s *Server) underKey(path string) (string, bool) {
+	segment, rest, found := strings.Cut(strings.TrimPrefix(path, "/"), "/")
+	if !found || subtle.ConstantTimeCompare([]byte(segment), []byte(s.key)) != 1 {
+		return "", false
+	}
+	return "/" + rest, true
 }
 
-// sameOrigin tells a request of the page itself: JSON, from its origin.
+// sameOrigin tells a request of the page itself: JSON, from its origin
+// (browsers send Origin with every POST).
 func (s *Server) sameOrigin(r *http.Request) bool {
-	if origin := r.Header.Get("Origin"); origin != "" && origin != "http://"+s.cfg.Addr {
+	if r.Header.Get("Origin") != "http://"+s.opts.Addr {
 		return false
 	}
 	if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" {
@@ -224,17 +224,17 @@ func (s *Server) sameOrigin(r *http.Request) bool {
 // Device and the sessions.
 type state struct {
 	Preferences []preferences.Entry `json:"preferences"`
-	// PreferencesError is why the config file can't be read.
-	PreferencesError string      `json:"preferences_error,omitempty"`
-	ConfigFile       string      `json:"config_file,omitempty"`
-	Status           host.Status `json:"status"`
+	// PreferencesProblem is why the config file can't be read.
+	PreferencesProblem string      `json:"preferences_problem,omitempty"`
+	PreferencesFile    string      `json:"preferences_file,omitempty"`
+	Status             host.Status `json:"status"`
 }
 
 func (s *Server) state(w http.ResponseWriter, r *http.Request) {
-	st := state{Status: s.cfg.Host.Status(), ConfigFile: s.cfg.ConfigFile}
-	entries, err := s.cfg.Preferences.List()
+	st := state{Status: s.opts.Host.Status(), PreferencesFile: s.opts.PreferencesFile}
+	entries, err := s.opts.Preferences.List()
 	if err != nil {
-		st.PreferencesError = err.Error()
+		st.PreferencesProblem = err.Error()
 	}
 	st.Preferences = entries
 	writeJSON(w, http.StatusOK, st)
@@ -276,15 +276,15 @@ func (s *Server) setPreference(w http.ResponseWriter, r *http.Request) {
 	}
 	var err error
 	if req.Unset {
-		err = s.cfg.Preferences.Unset(req.Key)
+		err = s.opts.Preferences.Unset(req.Key)
 	} else {
-		err = s.cfg.Preferences.Set(req.Key, req.Value)
+		err = s.opts.Preferences.Set(req.Key, req.Value)
 	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	s.cfg.Host.ReloadPreferences()
+	s.opts.Host.ReloadPreferences()
 	writeJSON(w, http.StatusOK, struct{}{})
 }
 
@@ -299,8 +299,8 @@ func (s *Server) preview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.State == "" {
-		s.cfg.Host.EndPreview()
-	} else if err := s.cfg.Host.Preview(req.State, time.Duration(req.ElapsedMS)*time.Millisecond); err != nil {
+		s.opts.Host.EndPreview()
+	} else if err := s.opts.Host.Preview(req.State, time.Duration(req.ElapsedMS)*time.Millisecond); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -310,7 +310,7 @@ func (s *Server) preview(w http.ResponseWriter, r *http.Request) {
 // heartbeat keeps the UI open for KeepAlive: the page is still there.
 func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
-	s.extend(s.cfg.Clock.Now().Add(KeepAlive))
+	s.extend(s.opts.Clock.Now().Add(KeepAlive))
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, struct{}{})
 }
@@ -333,10 +333,10 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		s.streams--
 		// The page may only be reloading: as long as after a heartbeat.
-		s.extend(s.cfg.Clock.Now().Add(KeepAlive))
+		s.extend(s.opts.Clock.Now().Add(KeepAlive))
 		s.mu.Unlock()
 	}()
-	watcher := s.cfg.Host.Watch()
+	watcher := s.opts.Host.Watch()
 	defer watcher.Close()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.WriteHeader(http.StatusOK)

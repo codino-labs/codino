@@ -51,6 +51,8 @@ web: $(WASI_SDK)/bin/clang++
 	$(WASI_SDK)/bin/clang++ --sysroot=$(WASI_SDK)/share/wasi-sysroot $(WEB_FLAGS) \
 		$(filter %.cpp,$(WEB_SOURCES)) -o $(WEB_OUT)/device.wasm
 	$(SHA256SUM) $(WEB_SOURCES) > $(WEB_OUT)/device.wasm.sources
+	@if command -v node >/dev/null 2>&1; then node virtual/browser/check.mjs $(WEB_OUT)/device.wasm ../protocol/fixtures; \
+	else echo "node not found: skipping the check of device.wasm against the protocol fixtures"; fi
 
 $(WASI_SDK)/bin/clang++:
 	@test -n "$(WASI_SDK_SHA256_$(WASI_ARCH)-$(WASI_OS))" || { echo "no pinned wasi-sdk for $(WASI_ARCH)-$(WASI_OS)"; exit 1; }

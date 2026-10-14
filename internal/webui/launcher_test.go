@@ -2,7 +2,6 @@ package webui_test
 
 import (
 	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -34,19 +33,18 @@ func open(t *testing.T, l *webui.Launcher) string {
 	return u
 }
 
-// visit opens the page in a fresh browser.
-func visit(t *testing.T, openURL string) (*http.Client, error) {
-	jar, _ := cookiejar.New(nil)
-	c := &http.Client{Jar: jar, Timeout: 5 * time.Second}
+// visit opens the page and returns its address (under its key).
+func visit(t *testing.T, openURL string) (string, error) {
+	c := &http.Client{Timeout: 5 * time.Second}
 	resp, err := c.Get(openURL)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET %s: %s", openURL, resp.Status)
 	}
-	return c, nil
+	return resp.Request.URL.String(), nil
 }
 
 func retired(h *host.Host) bool {
@@ -99,9 +97,10 @@ func TestClosingThePageStopsTheServerEndsThePreviewAndReleasesTheHostDaemon(t *t
 		t.Fatal(err)
 	}
 	base := strings.Split(u, "/open")[0]
-	req, _ := http.NewRequest(http.MethodPost, base+"/api/preview", strings.NewReader(`{"state":"done"}`))
+	req, _ := http.NewRequest(http.MethodPost, page+"api/preview", strings.NewReader(`{"state":"done"}`))
 	req.Header.Set("Content-Type", "application/json")
-	if resp, err := page.Do(req); err != nil || resp.StatusCode != http.StatusOK {
+	req.Header.Set("Origin", base)
+	if resp, err := http.DefaultClient.Do(req); err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("preview: %v %v", resp, err)
 	}
 	w := h.Watch()

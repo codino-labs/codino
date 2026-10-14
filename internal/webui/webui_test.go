@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -48,9 +47,10 @@ type ui struct {
 	prefs  preferences.File
 	server *webui.Server
 	http   *httptest.Server
-	// client has been through /open: it holds the UI's cookie.
 	client *http.Client
-	base   string
+	// origin is http://127.0.0.1:PORT; base the page's address under its
+	// key, as /open redirects to, without the trailing slash.
+	origin, base string
 }
 
 const configText = "# my Codino setup\nbrightness = 40 # dim desk\n"
@@ -66,18 +66,18 @@ func newUI(t *testing.T) *ui {
 	t.Cleanup(h.Close)
 	u := &ui{t: t, clock: clock, host: h, prefs: prefs}
 	u.http = httptest.NewUnstartedServer(nil)
-	u.base = "http://" + u.http.Listener.Addr().String()
-	u.server = webui.NewServer(webui.Config{Host: h, Preferences: prefs, Clock: clock, Addr: u.http.Listener.Addr().String()})
+	u.origin = "http://" + u.http.Listener.Addr().String()
+	u.server = webui.NewServer(webui.Options{Host: h, Preferences: prefs, Clock: clock, Addr: u.http.Listener.Addr().String()})
 	u.http.Config.Handler = u.server
 	u.http.Start()
 	t.Cleanup(u.http.Close)
 	t.Cleanup(u.server.Stop)
-	jar, _ := cookiejar.New(nil)
-	u.client = &http.Client{Jar: jar}
+	u.client = &http.Client{}
 	resp := u.get(u.client, u.server.OpenURL())
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("opening the UI: %s", resp.Status)
 	}
+	u.base = strings.TrimSuffix(resp.Request.URL.String(), "/")
 	return u
 }
 
@@ -97,7 +97,7 @@ func (u *ui) post(path, body string) (int, string) {
 	u.t.Helper()
 	req, _ := http.NewRequest(http.MethodPost, u.base+path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Origin", u.base)
+	req.Header.Set("Origin", u.origin)
 	resp, err := u.client.Do(req)
 	if err != nil {
 		u.t.Fatalf("POST %s: %v", path, err)
@@ -107,7 +107,7 @@ func (u *ui) post(path, body string) (int, string) {
 	return resp.StatusCode, string(out)
 }
 
-func (u *ui) config() string {
+func (u *ui) fileText() string {
 	u.t.Helper()
 	data, err := os.ReadFile(u.prefs.Path)
 	if err != nil {
@@ -131,19 +131,24 @@ func lines(w *host.Watcher) []string {
 	}
 }
 
-func TestThePageAndItsAPINeedTheCookieOfTheOpenURL(t *testing.T) {
+func TestThePageAndItsAPIAreOnlyUnderTheKeyTheOpenURLLeadsTo(t *testing.T) {
 	u := newUI(t)
-	stranger := &http.Client{}
+	if u.base == u.origin {
+		t.Fatalf("the open URL led to %s: no key", u.base)
+	}
+	guessed := u.origin + "/" + strings.Repeat("0", 64)
 
 	for _, path := range []string{"/", "/app.js", "/device.wasm", "/api/state", "/api/stream"} {
-		if resp := u.get(stranger, u.base+path); resp.StatusCode != http.StatusForbidden {
-			t.Errorf("GET %s without the cookie: %s, want 403", path, resp.Status)
+		for _, wrong := range []string{u.origin, guessed} {
+			if resp := u.get(u.client, wrong+path); resp.StatusCode != http.StatusForbidden {
+				t.Errorf("GET %s%s: %s, want 403", wrong, path, resp.Status)
+			}
 		}
 		if path == "/api/stream" {
 			continue
 		}
 		if resp := u.get(u.client, u.base+path); resp.StatusCode != http.StatusOK {
-			t.Errorf("GET %s with the cookie: %s, want 200", path, resp.Status)
+			t.Errorf("GET %s under the key: %s, want 200", path, resp.Status)
 		}
 	}
 }
@@ -151,19 +156,12 @@ func TestThePageAndItsAPINeedTheCookieOfTheOpenURL(t *testing.T) {
 func TestAnOpenURLWorksOnce(t *testing.T) {
 	u := newUI(t)
 	open := u.server.OpenURL()
-	jar, _ := cookiejar.New(nil)
-	first := &http.Client{Jar: jar}
-	if resp := u.get(first, open); resp.StatusCode != http.StatusOK {
+	if resp := u.get(u.client, open); resp.StatusCode != http.StatusOK {
 		t.Fatalf("first visit: %s", resp.Status)
 	}
 
-	jar2, _ := cookiejar.New(nil)
-	second := &http.Client{Jar: jar2}
-	if resp := u.get(second, open); resp.StatusCode != http.StatusForbidden {
+	if resp := u.get(u.client, open); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("second visit of the same URL: %s, want 403", resp.Status)
-	}
-	if resp := u.get(second, u.base+"/api/state"); resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("API after a reused URL: %s, want 403", resp.Status)
 	}
 }
 
@@ -185,14 +183,16 @@ func TestRequestsForAnotherHostAreRefused(t *testing.T) {
 
 func TestPostsFromAnotherOriginChangeNothing(t *testing.T) {
 	u := newUI(t)
-	for name, header := range map[string][2]string{
-		"another Origin":     {"Origin", "http://attacker.example"},
-		"a cross-site fetch": {"Sec-Fetch-Site", "cross-site"},
-		"a form, not JSON":   {"Content-Type", "application/x-www-form-urlencoded"},
+	for name, change := range map[string]func(*http.Request){
+		"another Origin":     func(r *http.Request) { r.Header.Set("Origin", "http://attacker.example") },
+		"no Origin":          func(r *http.Request) { r.Header.Del("Origin") },
+		"a cross-site fetch": func(r *http.Request) { r.Header.Set("Sec-Fetch-Site", "cross-site") },
+		"a form, not JSON":   func(r *http.Request) { r.Header.Set("Content-Type", "application/x-www-form-urlencoded") },
 	} {
 		req, _ := http.NewRequest(http.MethodPost, u.base+"/api/preferences", strings.NewReader(`{"key":"brightness","value":"90"}`))
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set(header[0], header[1])
+		req.Header.Set("Origin", u.origin)
+		change(req)
 		resp, err := u.client.Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -202,7 +202,7 @@ func TestPostsFromAnotherOriginChangeNothing(t *testing.T) {
 			t.Errorf("%s: got %s, want 403", name, resp.Status)
 		}
 	}
-	if got := u.config(); got != configText {
+	if got := u.fileText(); got != configText {
 		t.Fatalf("config file changed:\n%s", got)
 	}
 }
@@ -219,7 +219,7 @@ func TestAPreferenceSetInThePageWritesTheConfigFileAndReachesTheDevice(t *testin
 		t.Fatalf("got %d %s", code, body)
 	}
 	want := "# my Codino setup\nbrightness = 30 # dim desk\n"
-	if got := u.config(); got != want {
+	if got := u.fileText(); got != want {
 		t.Errorf("config file:\n%s\nwant:\n%s", got, want)
 	}
 	pushed := lines(w)
@@ -236,7 +236,7 @@ func TestAnInvalidPreferenceIsRefusedWithTheReason(t *testing.T) {
 	if code != http.StatusBadRequest || !strings.Contains(body, "brightness") {
 		t.Fatalf("got %d %s, want 400 naming the Preference", code, body)
 	}
-	if got := u.config(); got != configText {
+	if got := u.fileText(); got != configText {
 		t.Fatalf("config file changed:\n%s", got)
 	}
 }
@@ -249,7 +249,7 @@ func TestUnsettingAPreferenceReturnsItToItsDefault(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("got %d %s", code, body)
 	}
-	if got := u.config(); strings.Contains(got, "brightness") {
+	if got := u.fileText(); strings.Contains(got, "brightness") {
 		t.Fatalf("brightness still set:\n%s", got)
 	}
 }
@@ -385,7 +385,7 @@ func TestAnOpenURLWaitsForTheBrowserToStart(t *testing.T) {
 	clock := &fakeClock{now: time.UnixMilli(1760432400000)}
 	h := host.New(clock, devicelink.NoDevices)
 	defer h.Close()
-	s := webui.NewServer(webui.Config{Host: h, Preferences: preferences.File{Path: filepath.Join(t.TempDir(), "c.toml")},
+	s := webui.NewServer(webui.Options{Host: h, Preferences: preferences.File{Path: filepath.Join(t.TempDir(), "c.toml")},
 		Clock: clock, Addr: "127.0.0.1:1"})
 	defer s.Stop()
 
@@ -400,29 +400,53 @@ func TestAnOpenURLWaitsForTheBrowserToStart(t *testing.T) {
 	}
 }
 
-func TestAnOpenStreamKeepsTheUIOpen(t *testing.T) {
-	u := newUI(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u.base+"/api/stream", nil)
-	resp, err := u.client.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	readEvents(t, bufio.NewReader(resp.Body), 1)
+// signallingHost tells when the web UI starts watching the Host: a page's
+// stream is open.
+type signallingHost struct {
+	*host.Host
+	watching chan struct{}
+}
 
-	u.clock.Advance(time.Hour) // a background tab whose timers are throttled
-	if u.server.Expired() {
+func (h signallingHost) Watch() *host.Watcher {
+	defer close(h.watching)
+	return h.Host.Watch()
+}
+
+func TestAnOpenStreamKeepsTheUIOpen(t *testing.T) {
+	clock := &fakeClock{now: time.UnixMilli(1760432400000)}
+	h := host.New(clock, devicelink.NoDevices)
+	defer h.Close()
+	const addr = "127.0.0.1:1"
+	watched := signallingHost{Host: h, watching: make(chan struct{})}
+	s := webui.NewServer(webui.Options{Host: watched, Preferences: preferences.File{Path: filepath.Join(t.TempDir(), "c.toml")},
+		Clock: clock, Addr: addr})
+	defer s.Stop()
+	opened := httptest.NewRecorder()
+	s.ServeHTTP(opened, httptest.NewRequest(http.MethodGet, s.OpenURL(), nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	page := opened.Result().Header.Get("Location") // /KEY/
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+page+"api/stream", nil)
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		s.ServeHTTP(httptest.NewRecorder(), req)
+	}()
+	<-watched.watching
+
+	clock.Advance(time.Hour) // a background tab whose timers are throttled
+	open := !s.Expired()
+	cancel() // the page closes
+	<-served
+	if !open {
 		t.Fatal("expired with the page's stream open")
 	}
 
-	cancel()
-	resp.Body.Close()
-	deadline := time.Now().Add(5 * time.Second)
-	for u.server.Streams() > 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond) // the server notices the closed connection
+	clock.Advance(webui.KeepAlive - time.Second)
+	if s.Expired() {
+		t.Fatal("expired at once when the stream closed: a reload would lose the UI")
 	}
-	u.clock.Advance(webui.KeepAlive)
-	if !u.server.Expired() {
+	clock.Advance(time.Second)
+	if !s.Expired() {
 		t.Fatal("still open a KeepAlive after the page closed its stream")
 	}
 }

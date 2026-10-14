@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -46,27 +47,36 @@ func ui(paths daemon.Paths, args []string, out io.Writer) error {
 		return fmt.Errorf("ui: %w", err)
 	}
 	if !*noBrowser {
-		if err := openBrowser(url); err == nil {
+		err := openBrowser(paths, url)
+		if err == nil {
 			fmt.Fprintln(out, "Opened the Codino web UI in your browser. It closes when you close the page.")
 			return nil
-		} else {
-			fmt.Fprintf(out, "Could not open a browser (%v).\n", err)
 		}
+		fmt.Fprintf(out, "Could not open a browser (%v).\n", err)
 	}
 	fmt.Fprintf(out, "Open this link once, within 2 minutes (it works only once):\n%s\n", url)
 	return nil
 }
 
-// openBrowser opens url in the user's browser.
-func openBrowser(url string) error {
+// openBrowser opens url in the user's browser. The browser's command line
+// is readable by other local users, so it gets the path of an owner-only
+// page in the runtime directory that sends it on to url, rather than url and
+// its ticket.
+func openBrowser(paths daemon.Paths, url string) error {
+	page := filepath.Join(paths.Dir, "ui-open.html")
+	content := `<!doctype html><meta charset="utf-8"><title>Codino</title>` +
+		`<meta http-equiv="refresh" content="0;url=` + html.EscapeString(url) + `">`
+	if err := os.WriteFile(page, []byte(content), 0o600); err != nil {
+		return err
+	}
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		cmd = exec.Command("open", url)
+		cmd = exec.Command("open", page)
 	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", page)
 	default:
-		cmd = exec.Command("xdg-open", url)
+		cmd = exec.Command("xdg-open", page)
 	}
 	if err := cmd.Start(); err != nil {
 		return err

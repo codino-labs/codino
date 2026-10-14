@@ -358,7 +358,7 @@ func runDaemon(paths daemon.Paths, args []string) error {
 		host.WithTranscriptProbe(claudecode.Transcripts{}), host.WithLivenessProbe(liveness.Probe{}),
 		host.WithProjectRoots(gitrepo.Roots{}), host.WithThemeCopies(copies))
 	defer h.Close()
-	webUI := &webui.Launcher{Host: h, Preferences: prefsFile, ConfigFile: prefsFile.Path, Clock: systemClock{}}
+	webUI := &webui.Launcher{Host: h, Preferences: prefsFile, PreferencesFile: prefsFile.Path, Clock: systemClock{}}
 	defer webUI.Close() // before h.Close: it ends the preview
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -41,6 +41,9 @@ const device = {
   // receive feeds one protocol line (a string, or the bytes of a frame).
   receive(line) {
     if (!this.profile) return;
+    // The clock moves with every line too, not only when drawing: a hidden
+    // tab draws nothing, and heartbeats must not arrive at a stale time.
+    this.wasm.vd_set_millis(Math.floor(performance.now()) >>> 0);
     const bytes = typeof line === "string" ? encoder.encode(line) : line;
     const at = this.wasm.vd_line(bytes.length);
     new Uint8Array(this.wasm.memory.buffer, at, bytes.length).set(bytes);
@@ -206,10 +209,10 @@ function render() {
   $("#sessions").textContent = n === 0 ? "No Agent Sessions." :
     `${n} Agent Session${n === 1 ? "" : "s"}, Aggregate State ${status.aggregate_state.replace("_", " ")}.`;
 
-  const problem = current.preferences_error || status.preferences_problem;
+  const problem = current.preferences_problem || status.preferences_problem;
   $("#problem").hidden = !problem;
   $("#problem").textContent = problem ? `The config file is ignored: ${problem}` : "";
-  if (current.config_file) $("#config").textContent = current.config_file;
+  if (current.preferences_file) $("#config").textContent = current.preferences_file;
 
   for (const key of ["brightness", "rotation", "quiet_mode", "done_decay", "disconnected_timeout",
     "escalation.faster", "escalation.takeover", "escalation.steady", "layout"]) {

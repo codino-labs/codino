@@ -22,20 +22,22 @@ var errDeviceGone = errors.New("the Device went away")
 // not, and the Themes and Sprite Packs it has now. It waits for the reply
 // until ctx is done.
 func (h *Host) Install(ctx context.Context, install protocol.Install) (protocol.InstallReply, error) {
-	return h.askDevice(ctx, install, install.Kind, install.Name)
+	return h.askDevice(ctx, install, install.Kind, install.Name, &install)
 }
 
 // Uninstall removes an installed Theme or Sprite Pack from the claimed
 // Device, as Install.
 func (h *Host) Uninstall(ctx context.Context, kind protocol.Kind, name string) (protocol.InstallReply, error) {
-	return h.askDevice(ctx, protocol.NewUninstall(kind, name), kind, name)
+	return h.askDevice(ctx, protocol.NewUninstall(kind, name), kind, name, nil)
 }
 
 // askDevice sends an install or uninstall of kind and name, and waits for
 // the Device's reply to it without h.mu: a Device writing its flash takes a
 // while. A late reply to an earlier request, which its caller stopped
 // waiting for, still tells what the Device has, but isn't the answer.
-func (h *Host) askDevice(ctx context.Context, msg any, kind protocol.Kind, name string) (protocol.InstallReply, error) {
+// install is what msg installs; nil for an uninstall.
+func (h *Host) askDevice(ctx context.Context, msg any, kind protocol.Kind, name string,
+	install *protocol.Install) (protocol.InstallReply, error) {
 	h.installMu.Lock()
 	defer h.installMu.Unlock()
 	h.mu.Lock()
@@ -60,7 +62,7 @@ func (h *Host) askDevice(ctx context.Context, msg any, kind protocol.Kind, name 
 			h.unlock()
 			if reply.Kind == kind && reply.Name == name {
 				if reply.OK {
-					h.keepCopy(msg, kind, name)
+					h.keepCopy(kind, name, install)
 				}
 				return reply, nil
 			}
@@ -82,17 +84,16 @@ func installedOnDevice(dev *devicelink.Device) installedOn {
 	return installedOn{themes: dev.HelloReply.Themes, spritePacks: dev.HelloReply.SpritePacks}
 }
 
-// keepCopy keeps a copy of what the Device just installed, or forgets the
-// copy of what it uninstalled, for the web UI's preview. The I/O runs
-// without h.mu.
-func (h *Host) keepCopy(msg any, kind protocol.Kind, name string) {
+// keepCopy keeps a copy of what the Device just installed (install), or
+// forgets the copy of what it uninstalled (install nil), for the web UI's
+// preview. The I/O runs without h.mu.
+func (h *Host) keepCopy(kind protocol.Kind, name string, install *protocol.Install) {
 	if h.copies == nil {
 		return
 	}
-	install, installed := msg.(protocol.Install)
 	var err error
-	if installed {
-		err = h.copies.Save(install)
+	if install != nil {
+		err = h.copies.Save(*install)
 	} else {
 		err = h.copies.Remove(kind, name)
 	}
@@ -102,7 +103,7 @@ func (h *Host) keepCopy(msg any, kind protocol.Kind, name string) {
 	h.mu.Lock()
 	defer h.unlock()
 	h.themeCopies = slices.DeleteFunc(h.themeCopies, func(i protocol.Install) bool { return i.Kind == kind && i.Name == name })
-	if installed {
-		h.themeCopies = append(h.themeCopies, install)
+	if install != nil {
+		h.themeCopies = append(h.themeCopies, *install)
 	}
 }

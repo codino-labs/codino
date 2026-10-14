@@ -182,17 +182,24 @@ func (h *Host) refreshShow(silent bool) {
 // sendShowFrame sends the frame of the show due now, unless the Device has
 // it already. Callers hold h.mu.
 func (h *Host) sendShowFrame() {
-	size, ok := h.matrix()
-	if h.showing == nil || !ok {
-		return
-	}
-	frames := h.showing.framesFor(size)
-	i := frameAt(frames, h.clock.Now().Sub(h.showing.start))
-	if i == h.shownFrame {
+	i, frame, ok := h.showFrame()
+	if !ok || i == h.shownFrame {
 		return
 	}
 	h.shownFrame = i
-	h.send(protocol.NewRawFrame(frames[i].RGB))
+	h.send(frame)
+}
+
+// showFrame is the frame of the show due now and its index; false without a
+// show or a matrix to show it on. Callers hold h.mu.
+func (h *Host) showFrame() (int, protocol.RawFrame, bool) {
+	size, ok := h.matrix()
+	if h.showing == nil || !ok {
+		return 0, protocol.RawFrame{}, false
+	}
+	frames := h.showing.framesFor(size)
+	i := frameAt(frames, h.clock.Now().Sub(h.showing.start))
+	return i, protocol.NewRawFrame(frames[i].RGB), true
 }
 
 // frameAt is the index of the frame due `elapsed` into a looping animation.

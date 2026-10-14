@@ -14,7 +14,6 @@
 //   vd_set_millis(ms) the Device clock, before each vd_render
 //   vd_render()       the frame: width x height x RGB, row-major
 //   vd_width(), vd_height()  the frame's size: the matrix's
-//   vd_acknowledge()  a press of the Device's button
 //
 // The Host Daemon talks to the real Device: the page only watches, and sends
 // no reply back.
@@ -67,10 +66,6 @@ EXPORT(vd_receive) int vdReceive(int size) {
 }
 
 EXPORT(vd_reply) const char* vdReply() { return reply.data(); }
-
-EXPORT(vd_acknowledge) void vdAcknowledge() {
-  if (core) core->acknowledge();
-}
 
 EXPORT(vd_render) const uint8_t* vdRender() {
   if (!core) return nullptr;

@@ -43,6 +43,8 @@ type Host struct {
 	lastFailedClaim time.Time
 	closed          bool
 
+	doneDecay time.Duration
+
 	exitGrace time.Duration
 	// emptySince is when the last session ended (or the Host started without
 	// any); zero while there are sessions.
@@ -106,6 +108,16 @@ const StaleAfter = 15 * time.Minute
 // whether each session's Agent is still alive.
 const ProbeInterval = time.Second
 
+// DefaultDoneDecay is how long a session stays Done before it decays to Idle,
+// unless the human Acknowledges it first. It becomes a Preference (#11).
+const DefaultDoneDecay = 10 * time.Minute
+
+// WithDoneDecay sets how long a session stays Done before it decays to Idle
+// (default DefaultDoneDecay).
+func WithDoneDecay(d time.Duration) Option {
+	return func(h *Host) { h.doneDecay = d }
+}
+
 // DefaultExitGrace is how long the Host Daemon stays up with no sessions.
 const DefaultExitGrace = 5 * time.Minute
 
@@ -125,6 +137,7 @@ func New(clock Clock, devices devicelink.Discoverer, opts ...Option) *Host {
 		devices:    devices,
 		sessions:   newTracker(),
 		exitGrace:  DefaultExitGrace,
+		doneDecay:  DefaultDoneDecay,
 		emptySince: clock.Now(),
 		retired:    make(chan struct{}),
 	}
@@ -163,14 +176,16 @@ func (h *Host) Apply(e Event) error {
 		return ErrRetired
 	}
 	now := h.clock.Now()
-	s, removed := h.sessions.apply(e, now)
+	c := h.sessions.apply(e, now)
 	h.updateExitGrace(now)
 	switch {
-	case s == nil:
-	case removed:
-		h.send(protocol.NewSessionRemove(s.id))
-	default:
-		h.send(upsert(s))
+	case c.removed:
+		h.send(protocol.NewSessionRemove(c.s.id))
+	case c.upserted:
+		h.send(upsert(c.s))
+	}
+	if c.acknowledged {
+		h.send(acknowledge(c.s))
 	}
 	return nil
 }
@@ -186,8 +201,8 @@ func (h *Host) updateExitGrace(now time.Time) {
 	}
 }
 
-// Tick does the time-driven work: claim a Device when none is claimed, and
-// send a heartbeat every HeartbeatInterval. The daemon calls it often (more
+// Tick does the time-driven work: claim a Device when none is claimed, decay
+// Done sessions to Idle, and send a heartbeat every HeartbeatInterval. The daemon calls it often (more
 // than once per HeartbeatInterval); tests call it after moving the fake clock.
 func (h *Host) Tick() {
 	h.tickMu.Lock()
@@ -198,6 +213,9 @@ func (h *Host) Tick() {
 		close(h.retired)
 	}
 	h.dropGoneDevice()
+	for _, s := range h.sessions.decayDone(h.clock.Now(), h.doneDecay) {
+		h.send(upsert(s))
+	}
 	if h.device != nil {
 		if now := h.clock.Now(); now.Sub(h.lastHeartbeat) >= HeartbeatInterval {
 			h.send(protocol.NewHeartbeat(now.UnixMilli()))
@@ -310,6 +328,36 @@ func (h *Host) claim() {
 	h.lastHeartbeat = now // hello counts as one
 	for _, s := range h.sessions.ordered() {
 		h.send(upsert(s))
+		if s.state == AwaitingInput && !s.acknowledged.IsZero() {
+			h.send(acknowledge(s))
+		}
+	}
+	go h.listen(dev)
+}
+
+// listen applies what the human does on the Device until it is gone.
+func (h *Host) listen(dev *devicelink.Device) {
+	for {
+		select {
+		case <-dev.Acknowledged():
+			h.acknowledgeAll()
+		case <-dev.Gone():
+			return
+		}
+	}
+}
+
+// acknowledgeAll applies an Acknowledge on the Device: every Done session is
+// cleared and every Escalation restarts. The Device restarted Escalation
+// itself, so only the Session State changes go back to it.
+func (h *Host) acknowledgeAll() {
+	h.mu.Lock()
+	defer h.unlock()
+	now := h.clock.Now()
+	for _, s := range h.sessions.ordered() {
+		if s.acknowledge(now) {
+			h.send(upsert(s))
+		}
 	}
 }
 
@@ -355,6 +403,12 @@ func (h *Host) unlock() {
 	for _, d := range dropped {
 		d.Close()
 	}
+}
+
+// acknowledge tells the Device when the human last Acknowledged a waiting
+// session, so it restarts Escalation from then.
+func acknowledge(s *session) protocol.Acknowledge {
+	return protocol.NewAcknowledge(s.id, s.acknowledged.UnixMilli())
 }
 
 func upsert(s *session) protocol.SessionUpsert {

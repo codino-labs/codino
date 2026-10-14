@@ -4,6 +4,10 @@
 // the matrix on stderr with ANSI 24-bit colors, so the protocol stream stays
 // clean when a Host drives it through a pipe or pseudo-terminal.
 //
+// When the matrix is drawn on a terminal, pressing Enter in that terminal is
+// the Device's Acknowledge (the button of a real Device): the Virtual Device
+// sends it to the Host on stdout.
+//
 // Usage: virtual-device [--size WxH]
 #include <chrono>
 #include <cmath>
@@ -11,12 +15,19 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <fstream>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
 
 #include "device_core.h"
+
+#if defined(__unix__) || defined(__APPLE__)
+#include <unistd.h>
+#define HAVE_TERMINAL_KEYS 1
+#endif
 
 namespace {
 
@@ -91,13 +102,20 @@ device::HardwareProfile referenceProfile() {
   return p;
 }
 
-// Lines read from stdin on their own thread, so the main loop keeps
-// rendering (Disconnected, later animations) while the Host is silent.
+// What the main loop handles: a protocol line from the Host on stdin, or the
+// human pressing Enter (Acknowledge).
+struct Input {
+  bool acknowledge = false;
+  std::string line;
+};
+
+// Inputs read on their own threads, so the main loop keeps rendering
+// (Disconnected, Escalation) while the Host is silent.
 class LineQueue {
  public:
-  void push(std::string line) {
+  void push(Input input) {
     std::lock_guard<std::mutex> lock(mu_);
-    lines_.push_back(std::move(line));
+    lines_.push_back(std::move(input));
     ready_.notify_one();
   }
   void close() {
@@ -106,8 +124,8 @@ class LineQueue {
     ready_.notify_one();
   }
   enum class Result { Line, Timeout, Closed };
-  // Waits up to `wait` for the next line.
-  Result pop(std::string& line, std::chrono::milliseconds wait) {
+  // Waits up to `wait` for the next input.
+  Result pop(Input& line, std::chrono::milliseconds wait) {
     std::unique_lock<std::mutex> lock(mu_);
     ready_.wait_for(lock, wait, [this] { return !lines_.empty() || closed_; });
     if (!lines_.empty()) {
@@ -121,7 +139,7 @@ class LineQueue {
  private:
   std::mutex mu_;
   std::condition_variable ready_;
-  std::deque<std::string> lines_;
+  std::deque<Input> lines_;
   bool closed_ = false;
 };
 
@@ -154,26 +172,40 @@ int main(int argc, char** argv) {
   device::PixelBuffer shown = core.render();
   draw(shown, "(start)");
 
-  LineQueue input;
-  std::thread reader([&input] {
+  // Shared with the detached terminal reader, which may outlive main().
+  auto input = std::make_shared<LineQueue>();
+  std::thread reader([input] {
     std::string line;
-    while (std::getline(std::cin, line)) input.push(line);
-    input.close();
+    while (std::getline(std::cin, line)) input->push({false, line});
+    input->close();
   });
+#ifdef HAVE_TERMINAL_KEYS
+  // Only when a human watches the matrix on a terminal: a Virtual Device a
+  // test or a background Host Daemon drives must not read the terminal.
+  if (isatty(STDERR_FILENO)) {
+    // Detached: it may block reading the terminal until the process exits.
+    std::thread([input] {
+      std::ifstream tty("/dev/tty");
+      std::string line;
+      while (std::getline(tty, line)) input->push({true, {}});
+    }).detach();
+    std::fputs("\x1b[2m(press Enter to Acknowledge)\x1b[0m\n", stderr);
+  }
+#endif
 
   // Render at least this often without input, so time-driven frames show.
   constexpr std::chrono::milliseconds kFrameInterval{100};
-  std::string line;
+  Input in;
   for (;;) {
-    const LineQueue::Result got = input.pop(line, kFrameInterval);
+    const LineQueue::Result got = input->pop(in, kFrameInterval);
     if (got == LineQueue::Result::Closed) break;
     std::string cause = "(no message from the Host)";
     if (got == LineQueue::Result::Line) {
-      const std::string reply = core.receive(line);
+      const std::string reply = in.acknowledge ? core.acknowledge() : core.receive(in.line);
       if (!reply.empty()) {
         std::cout << reply << '\n' << std::flush;
       }
-      cause = line;
+      cause = in.acknowledge ? "(Acknowledge: Enter pressed)" : in.line;
     }
     const device::PixelBuffer& frame = core.render();
     if (frame != shown) {

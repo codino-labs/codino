@@ -3,6 +3,7 @@
 //
 //	codino event --session ID --state STATE [--project PATH]
 //	codino event --session ID --end
+//	codino event --session ID --acknowledge [--state STATE]
 //	codino status [--json]
 //	codino daemon [--virtual-device PATH] [--exit-grace DURATION]
 //	codino hook   (internal: run by the Claude Code plugin's hooks)
@@ -44,11 +45,14 @@ const exitGraceEnv = "CODINO_EXIT_GRACE"
 const usage = `usage:
   codino event --session ID --state STATE [--project PATH]
   codino event --session ID --end
+  codino event --session ID --acknowledge [--state STATE]
   codino status [--json]
   codino daemon [--virtual-device PATH] [--exit-grace DURATION]
   codino hook   (internal: Claude Code hooks pipe their JSON to it)
 
 STATE is one of: idle, working, awaiting_input, done, error.
+--acknowledge: the human has seen the session (a new prompt): it clears Done
+and restarts the Escalation of Awaiting Input.
 `
 
 func main() {
@@ -98,14 +102,15 @@ func event(paths daemon.Paths, args []string) error {
 	state := fs.String("state", "", "Session State")
 	project := fs.String("project", "", "project directory of the session")
 	end := fs.Bool("end", false, "the session ended: remove it")
+	acknowledge := fs.Bool("acknowledge", false, "the human has seen the session: clear Done, restart Escalation")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() > 0 || (*state == "") == !*end {
-		fmt.Fprintf(os.Stderr, "%s event: give --state or --end\n%s", name, usage)
+	if fs.NArg() > 0 || (*end && (*state != "" || *acknowledge)) || (!*end && *state == "" && !*acknowledge) {
+		fmt.Fprintf(os.Stderr, "%s event: give --state, --acknowledge or --end\n%s", name, usage)
 		return errUsage
 	}
-	e := host.Event{SessionID: *id, State: host.SessionState(*state), End: *end}
+	e := host.Event{SessionID: *id, State: host.SessionState(*state), End: *end, Acknowledge: *acknowledge}
 	if *project != "" {
 		abs, err := filepath.Abs(*project)
 		if err != nil {

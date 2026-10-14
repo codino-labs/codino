@@ -32,7 +32,7 @@ Run a single test with `go test -race ./internal/host -run 'TestReplug'`.
 ```
 cmd/codino/          the one binary: CLI (`event`, `status`), the Host Daemon (`daemon`) and `hook` (internal, run by the plugin)
 internal/claudecode/ Claude Code Adapter: hook JSON → host.Events; transcript probe (interrupts, last write)
-internal/host/       Host core: Session Tracker, Aggregate State, Device Link driving, heartbeat, exit grace, stuck-session cleanup; clock and probes injected
+internal/host/       Host core: Session Tracker, Aggregate State, Done decay, Acknowledge, Device Link driving, heartbeat, exit grace, stuck-session cleanup; clock and probes injected
 internal/liveness/   liveness probe: is the Agent's pid still its process (signal 0; /proc start time on Linux)
 internal/devicelink/ handshake and claim; Discoverer seam (VirtualDevice now, USB serial later)
 internal/daemon/     local Unix socket: server, client (`Client.Deliver` spawns the daemon on demand)
@@ -42,6 +42,8 @@ internal/protocol/   wire messages, as in protocol/README.md
 Every Agent's signals become `host.Event`s delivered with `daemon.Client.Deliver`: `codino event` does it from flags, `codino hook` from hook JSON through the Claude Code Adapter. Events carry the time the Agent signalled them (`At`); the Session Tracker drops one older than the last applied to its session, because async hooks race. Host core tests (`internal/host`) drive events and fake clock ticks in and assert on the protocol lines a fake Device receives, including the shared fixtures; `claudecode_replay_test.go` replays the hook spike recordings in `fixtures/hooks/claude-code/` through the Adapter.
 
 Stuck sessions (#8): once a second the Host probes, outside its lock, the liveness of every session with a pid (`LivenessProbe`) and the transcript of every Working/Awaiting Input session (`TranscriptProbe`). A session whose Agent is gone is removed, as if it had ended (kill -9 fires no SessionEnd); an interrupted turn goes back to Idle; a Working session with no hook and no transcript write for `host.StaleAfter` (15 min) falls back to Idle. The hook reads the Agent's start time (`liveness.Started`) while the Agent is certainly alive, so a reused pid reads as gone. A session without a pid is never reaped, only judged stale. Host core tests fake both probes (`fakeLiveness`, `fakeTranscripts`, `quietTranscript`). The product name stays in `cmd/codino` (runtime directory name, `CODINO_VIRTUAL_DEVICE`, `CODINO_EXIT_GRACE`).
+
+Done decay and Acknowledge (#9): the Session Tracker returns a session Done for `host.DefaultDoneDecay` (10 min, `host.WithDoneDecay`) to Idle on a Tick. An event with `Acknowledge` (a prompt the human typed, `codino event --acknowledge`) clears that session's Done and restarts its Escalation; an `acknowledge` from the Device (`devicelink.Device.Acknowledged`) does it for every session. Escalation itself is the Device's (ADR-0001): the Host only tells it when a waiting session was Acknowledged, and replays that after the upserts when it claims a Device. `internal/host/acknowledge_test.go` drives the Device side through the fake Device's `toHost`.
 
 ### Demo: `codino event` drives the Virtual Device
 
@@ -58,8 +60,11 @@ and send events from another:
 ./codino event --session a --state working --project .
 ./codino event --session b --state awaiting_input
 ./codino status
+./codino event --session b --acknowledge   # restarts b's Escalation
 ./codino event --session b --end
 ```
+
+Awaiting Input escalates on the matrix: a gentle pulse, faster and brighter after 30 s, a Takeover in the Project Color after 2 min, a steady glow after 10 min. Press Enter in the daemon's terminal to Acknowledge on the Virtual Device: it reads keys from `/dev/tty` only when its matrix goes to a terminal.
 
 Without a running daemon, `codino event` spawns one in the background. It reads the Virtual Device path from `CODINO_VIRTUAL_DEVICE` (use an absolute path) and writes its output, matrix included, to `host.log` next to the socket:
 
@@ -101,7 +106,7 @@ device/
 ```
 
 - **The Device core stays portable.** C++17 and the standard library plus ArduinoJson only: no Arduino core, FastLED or OS calls, because the same code builds for the firmware, the terminal and the browser. Hardware, time and I/O come in through the constructor (`HardwareProfile`, `Clock`) or `receive()`.
-- **Test at the seam.** Feed protocol lines (prefer the fixtures) and fake clock ticks; assert on `render()`'s pixel buffer with semantic checks ("the whole matrix is one lit color", "same frame as a lone Awaiting Input session"), not golden frames or private state. No test sleeps.
+- **Test at the seam.** Feed protocol lines (prefer the fixtures), `acknowledge()` presses and fake clock ticks; assert on `render()`'s pixel buffer with semantic checks ("the whole matrix is one lit color", "same frame as a lone Awaiting Input session"), not golden frames or private state. No test sleeps.
 - **Names** follow `CONTEXT.md` (`SessionState::AwaitingInput`, `aggregateState`, `HardwareProfile`). The product name stays out of identifiers: the namespace is `device`.
 
 A change is done when this exits 0 (needs `cmake` and a C++17 compiler):
@@ -111,6 +116,8 @@ make -C device test
 ```
 
 Run a single test with `device/build/device_core_test -tc="*Aggregate State*"`.
+
+Escalation (#9) lives in the Device core: per session, from `state_entered` (related to the Device clock through `host_time`) or the latest Acknowledge. Its thresholds are a `device::Escalation` constructor parameter, with defaults until they become Preferences. Escalation tests send `heartbeat(clock)`, whose Host time tracks the fake clock, and compare with frames of a fresh Device (`waitingFor(ms)`) or watch a stretch of frames (`watch`: pulses, brightness, colors).
 
 The terminal Virtual Device renders every 100 ms even without input, so Disconnected shows 5 s after the Host goes silent:
 

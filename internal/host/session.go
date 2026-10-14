@@ -46,7 +46,8 @@ func ParseSessionState(name string) (SessionState, error) {
 type Event struct {
 	// SessionID keys the Agent Session. Required.
 	SessionID string `json:"session_id"`
-	// State is the Session State the session enters. Required unless End.
+	// State is the Session State the session enters. Required unless End or
+	// Acknowledge; kept when empty.
 	State SessionState `json:"state,omitempty"`
 	// Project is the session's project directory; kept when empty.
 	Project string `json:"project,omitempty"`
@@ -57,8 +58,9 @@ type Event struct {
 	// one older than the last event applied to its session is dropped.
 	At time.Time `json:"at,omitzero"`
 	// Acknowledge means the human has seen the session (a prompt typed into
-	// it). It travels with the event so the Host can act on it; Acknowledge
-	// semantics (clearing Done, resetting Escalation) are not applied yet.
+	// it): it clears Done and restarts Escalation, for this session only.
+	// Applied before State, so a new prompt to a Done session makes it
+	// Working. An Acknowledge of an unknown session is ignored.
 	Acknowledge bool `json:"acknowledge,omitempty"`
 	// PID is the Agent's process, the session's liveness handle; kept when 0.
 	PID int `json:"pid,omitempty"`
@@ -75,7 +77,7 @@ func (e Event) Validate() error {
 	if e.SessionID == "" {
 		return errors.New("event: missing session id")
 	}
-	if e.End {
+	if e.End || (e.Acknowledge && e.State == "") {
 		return nil
 	}
 	if _, err := ParseSessionState(string(e.State)); err != nil {
@@ -100,6 +102,10 @@ type session struct {
 	tile         int
 	liveness     livenessHandle
 	transcript   string
+	// acknowledged is when the human last Acknowledged the session since it
+	// entered its state; zero when they haven't. The Device restarts
+	// Escalation from it.
+	acknowledged time.Time
 }
 
 // livenessHandle names the Agent's process: its pid and, when known, when it
@@ -125,9 +131,20 @@ func newTracker() *tracker {
 // longer than any async hook takes to reach the Host Daemon.
 const endedMemory = time.Minute
 
-// apply records the event at now. It returns the session when it changed (nil
-// when it didn't) and whether it was removed.
-func (t *tracker) apply(e Event, now time.Time) (s *session, removed bool) {
+// change is what applying an event did to a session.
+type change struct {
+	// s is the session, nil when the event changed nothing.
+	s       *session
+	removed bool
+	// upserted: s changed and the Device needs a session_upsert.
+	upserted bool
+	// acknowledged: s is Awaiting Input and was Acknowledged at
+	// s.acknowledged, which the Device needs to restart Escalation.
+	acknowledged bool
+}
+
+// apply records the event at now and returns what changed.
+func (t *tracker) apply(e Event, now time.Time) change {
 	at := notAfter(e.At, now)
 	for id, ended := range t.ended {
 		if now.Sub(ended) > endedMemory {
@@ -136,14 +153,20 @@ func (t *tracker) apply(e Event, now time.Time) (s *session, removed bool) {
 	}
 	s, known := t.sessions[e.SessionID]
 	if known && at.Before(s.lastEventAt) {
-		return nil, false
+		return change{}
 	}
 	if ended, ok := t.ended[e.SessionID]; ok && !known && !at.After(ended) {
-		return nil, false
+		return change{}
 	}
 	if e.End {
 		t.forget(e.SessionID, at)
-		return s, known
+		if !known {
+			return change{}
+		}
+		return change{s: s, removed: true}
+	}
+	if !known && e.State == "" {
+		return change{} // an Acknowledge of a session the Host doesn't know
 	}
 	if !known {
 		s = &session{id: e.SessionID, projectColor: DefaultProjectColor, tile: t.freeTile()}
@@ -151,9 +174,11 @@ func (t *tracker) apply(e Event, now time.Time) (s *session, removed bool) {
 	}
 	s.lastEventAt = at
 	changed := !known
-	if e.State != s.state {
-		s.state = e.State
-		s.stateEntered = at
+	if e.Acknowledge {
+		changed = s.acknowledge(at) || changed
+	}
+	if e.State != "" && e.State != s.state {
+		s.enter(e.State, at)
 		changed = true
 	}
 	if e.Project != "" {
@@ -165,10 +190,32 @@ func (t *tracker) apply(e Event, now time.Time) (s *session, removed bool) {
 	if e.Transcript != "" {
 		s.transcript = e.Transcript
 	}
-	if !changed {
-		return nil, false
+	acknowledged := e.Acknowledge && s.state == AwaitingInput && !s.acknowledged.IsZero()
+	if !changed && !acknowledged {
+		return change{}
 	}
-	return s, false
+	return change{s: s, upserted: changed, acknowledged: acknowledged}
+}
+
+// acknowledge is the human seeing the session at at: Done is cleared to
+// Idle, and Awaiting Input stays but its Escalation restarts. It reports
+// whether the Session State changed.
+func (s *session) acknowledge(at time.Time) bool {
+	switch s.state {
+	case Done:
+		s.enter(Idle, at)
+		return true
+	case AwaitingInput:
+		s.acknowledged = at
+	}
+	return false
+}
+
+// enter puts the session in state, entered at at.
+func (s *session) enter(state SessionState, at time.Time) {
+	s.state = state
+	s.stateEntered = at
+	s.acknowledged = time.Time{}
 }
 
 // interrupt returns a Working or Awaiting Input session to Idle when the
@@ -187,11 +234,22 @@ func (t *tracker) interrupt(id string, at, now time.Time) *session {
 	return s
 }
 
-// toIdle returns a stuck session to Idle, entered at at.
-func (s *session) toIdle(at time.Time) {
-	s.state = Idle
-	s.stateEntered = at
+// decayDone returns to Idle, entered at now, every session that has been Done
+// for decay: the Done decay timer Acknowledges it. It returns the sessions
+// that changed, by Tile slot.
+func (t *tracker) decayDone(now time.Time, decay time.Duration) []*session {
+	var decayed []*session
+	for _, s := range t.ordered() {
+		if s.state == Done && now.Sub(s.stateEntered) >= decay {
+			s.toIdle(now)
+			decayed = append(decayed, s)
+		}
+	}
+	return decayed
 }
+
+// toIdle returns the session to Idle, entered at at.
+func (s *session) toIdle(at time.Time) { s.enter(Idle, at) }
 
 // staleToIdle returns a Working session to Idle when neither a hook nor its
 // transcript, last written at modified (zero when unknown), has shown any

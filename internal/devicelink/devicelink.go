@@ -57,9 +57,10 @@ type Device struct {
 	Name       string
 	HelloReply protocol.HelloReply
 
-	port io.ReadWriteCloser
-	gone chan struct{}
-	once sync.Once
+	port         io.ReadWriteCloser
+	gone         chan struct{}
+	once         sync.Once
+	acknowledged chan struct{}
 }
 
 // Claim tries every candidate in order and returns the first one that answers
@@ -138,21 +139,32 @@ func handshake(c Candidate, now time.Time) (*Device, error) {
 		return nil, &VersionMismatchError{Candidate: c.Name, Device: reply.Protocol}
 	}
 
-	dev := &Device{Name: c.Name, HelloReply: reply, port: port, gone: make(chan struct{})}
+	dev := &Device{Name: c.Name, HelloReply: reply, port: port, gone: make(chan struct{}), acknowledged: make(chan struct{}, 1)}
 	go dev.drain(lines)
 	return dev, nil
 }
 
-// drain reads what the Device sends after the handshake. v0 Devices send
-// nothing else; the read only notices when the Device goes away.
+// drain reads what the Device sends after the handshake, an Acknowledge
+// from the human, until the Device goes away.
 func (d *Device) drain(lines *bufio.Reader) {
 	for {
-		if _, err := lines.ReadBytes('\n'); err != nil {
+		line, err := lines.ReadBytes('\n')
+		if err != nil {
 			d.Close()
 			return
 		}
+		if protocol.IsAcknowledge(line) {
+			select {
+			case d.acknowledged <- struct{}{}:
+			default: // one is pending already: Acknowledging twice is once
+			}
+		}
 	}
 }
+
+// Acknowledged receives once the human Acknowledges on the Device (a button
+// press or a double tap), for every session.
+func (d *Device) Acknowledged() <-chan struct{} { return d.acknowledged }
 
 // WriteTimeout bounds one write to a Device that stopped reading, on
 // transports that support write deadlines.

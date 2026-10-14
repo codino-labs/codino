@@ -62,6 +62,15 @@ type Heartbeat struct {
 	HostTime int64  `json:"host_time"`
 }
 
+// Acknowledge is the human having seen Agent Sessions. Host → Device it names
+// one session and when it was Acknowledged; Device → Host it carries only its
+// type and stands for every session (a button press or double tap).
+type Acknowledge struct {
+	Type     string `json:"type"`
+	ID       string `json:"id"`
+	HostTime int64  `json:"host_time"`
+}
+
 // NewHello and the other constructors fill in the message type, so callers
 // can't send a message with the wrong one.
 func NewHello(hostTime int64) Hello {
@@ -74,6 +83,10 @@ func NewSessionUpsert(id, state, projectColor string, stateEntered int64, tile i
 
 func NewSessionRemove(id string) SessionRemove { return SessionRemove{Type: "session_remove", ID: id} }
 
+func NewAcknowledge(id string, hostTime int64) Acknowledge {
+	return Acknowledge{Type: "acknowledge", ID: id, HostTime: hostTime}
+}
+
 func NewHeartbeat(hostTime int64) Heartbeat { return Heartbeat{Type: "heartbeat", HostTime: hostTime} }
 
 // Encode renders a message as one protocol line, newline included.
@@ -83,6 +96,15 @@ func Encode(msg any) ([]byte, error) {
 		return nil, fmt.Errorf("encode %T: %w", msg, err)
 	}
 	return append(line, '\n'), nil
+}
+
+// IsAcknowledge reports whether a line from the Device is an acknowledge.
+// Its other fields don't matter: a Device Acknowledges every session.
+func IsAcknowledge(line []byte) bool {
+	var m struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal(line, &m) == nil && m.Type == "acknowledge"
 }
 
 // ErrNotHelloReply marks a line that is not a hello_reply at all: not JSON, or

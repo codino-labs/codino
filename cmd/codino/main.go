@@ -164,7 +164,7 @@ func show(paths daemon.Paths, args []string, out io.Writer) error {
 	file := fs.Arg(0)
 	data, err := os.ReadFile(file)
 	if err != nil {
-		return err
+		return fmt.Errorf("show: %w", err)
 	}
 	// Fail on a file that is no picture before spawning a daemon for it.
 	if _, err := picture.Decode(data); err != nil {
@@ -178,7 +178,7 @@ func show(paths daemon.Paths, args []string, out io.Writer) error {
 	defer stop()
 	s, err := client.Show(ctx, data)
 	if err != nil {
-		return err
+		return fmt.Errorf("show %s: %w", file, err)
 	}
 	defer s.Stop()
 	if s.Status.Device.Claimed {

@@ -53,11 +53,12 @@ func (h *Host) Show(p *picture.Picture) (*Showing, error) {
 	return s, nil
 }
 
-// ShowsPicture reports whether a picture is shown (Show).
-func (h *Host) ShowsPicture() bool {
+// ShowsAnimation reports whether an animation is shown (Show): its frames
+// are due more often than a still picture's.
+func (h *Host) ShowsAnimation() bool {
 	h.mu.Lock()
 	defer h.unlock()
-	return h.showing != nil
+	return h.showing != nil && h.showing.picture.Animated()
 }
 
 // Stop ends the show: the Device returns to its own rendering. Stopping a
@@ -136,6 +137,18 @@ func (h *Host) enterRawMode() {
 	h.send(protocol.NewRawModeEnter())
 	h.shownFrame = -1
 	h.sendShowFrame()
+}
+
+// refreshShow is for each heartbeat during a show: after a silence the
+// Device took for Disconnected (a Host asleep), which ended its Raw Mode, it
+// enters Raw Mode again; otherwise it resends the frame shown, so a frame lost
+// or garbled on the way is good again a heartbeat later. Callers hold h.mu.
+func (h *Host) refreshShow(silent bool) {
+	if silent {
+		h.enterRawMode()
+		return
+	}
+	h.shownFrame = -1
 }
 
 // sendShowFrame sends the frame of the show due now, unless the Device has

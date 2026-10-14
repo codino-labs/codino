@@ -59,6 +59,9 @@ func Decode(data []byte) (*Picture, error) {
 	return &Picture{still: img}, nil
 }
 
+// Animated reports whether the picture has more than one frame.
+func (p *Picture) Animated() bool { return p.animation != nil }
+
 // Frames renders the picture for a width x height matrix: one frame for a
 // still image, every frame of an animation with its delay.
 func (p *Picture) Frames(width, height int) []Frame {

@@ -155,9 +155,9 @@ Size: a 16×16 matrix makes 770-byte lines (8×8: 194), so a Device's line buffe
 
 `codino show IMAGE` hands a PNG, JPEG or GIF to the Host Daemon, which keeps the show while the command runs:
 
-1. On start, or on claiming a Device during a show (after the `session_upsert`s and replayed `acknowledge`s): `raw_mode_enter`, then the current frame.
+1. On start, or on claiming a Device during a show (after the `session_upsert`s and replayed `acknowledge`s): `raw_mode_enter`, then the current frame. Also after the Host itself went silent for the Disconnected timeout (a laptop asleep), since the Device left Raw Mode meanwhile.
 2. Each picture is fitted into the Device's matrix: its aspect ratio kept, centered on unlit LEDs, each LED the average of the pixels it covers (the nearest one when scaling up), transparency as unlit.
-3. An animated GIF loops forever by its frame delays (its loop count is ignored), its frames composed by their disposal methods; delays under 20 ms play at 100 ms, as browsers do. A frame is sent when the one due changes; a still picture is sent once.
+3. An animated GIF loops forever by its frame delays (its loop count is ignored), its frames composed by their disposal methods; delays under 20 ms play at 100 ms, as browsers do. A frame is sent when the one due changes, and again with every heartbeat, so a frame lost or garbled on the way is good again a second later.
 4. On Ctrl-C (or SIGTERM, or the command's connection to the daemon closing for any reason): `raw_mode_exit`. A newer `codino show` replaces the picture (a new `raw_mode_enter` and frame) and ends the older command.
 
 A show keeps the Host Daemon from retiring, as sessions do.

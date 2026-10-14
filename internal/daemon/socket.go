@@ -125,6 +125,17 @@ func serveConn(ctx context.Context, conn net.Conn, h *host.Host) {
 	reply(conn, resp)
 }
 
+// closedBy returns a channel closed once the peer closes (or half-closes)
+// conn. What it reads meanwhile is discarded.
+func closedBy(conn net.Conn) <-chan struct{} {
+	closed := make(chan struct{})
+	go func() {
+		io.Copy(io.Discard, conn)
+		close(closed)
+	}()
+	return closed
+}
+
 func reply(conn net.Conn, resp Response) {
 	if err := json.NewEncoder(conn).Encode(resp); err != nil {
 		slog.Debug("reply to client", "err", err)
@@ -153,13 +164,8 @@ func serveShow(ctx context.Context, conn net.Conn, req Request, h *host.Host) {
 	st := h.Status()
 	reply(conn, Response{Status: &st})
 	conn.SetDeadline(time.Time{})
-	left := make(chan struct{})
-	go func() {
-		io.Copy(io.Discard, conn) // until the client half-closes or goes away
-		close(left)
-	}()
 	select {
-	case <-left:
+	case <-closedBy(conn): // the client half-closed or went away
 	case <-showing.Ended():
 	case <-ctx.Done():
 	}

@@ -1112,7 +1112,7 @@ TEST_CASE_FIXTURE(AggregateDevice8x8, "any Awaiting Input pre-empts Raw Mode at 
   CHECK(showsRawFixture(core.render()));
 }
 
-TEST_CASE_FIXTURE(Device8x8, "Escalation goes on under Raw Mode: a Takeover after 2 min ignored") {
+TEST_CASE_FIXTURE(Device8x8, "Escalation goes on under Raw Mode: after 2 min ignored a Takeover fills the matrix in the Project Color") {
   core.receive(fixture("raw-mode-enter.jsonl"));
   core.receive(upsert("asking", "awaiting_input", "#2ad14f"));
   core.receive(upsert("busy", "working", "#ff3da5"));
@@ -1210,7 +1210,7 @@ TEST_CASE("a frame has one pixel per LED of the Hardware Profile's matrix") {
   profile.width = 16;
   profile.height = 16;
   device::DeviceCore core(profile, "0.1.0", clock);
-  std::string frame(1, '\xFF');
+  std::string frame(1, device::DeviceCore::kRawFrameStart);
   for (int i = 0; i < 16 * 16; ++i) frame += i == 16 * 16 - 1 ? std::string("\x01\x02\x03", 3) : std::string(3, '\x00');
   core.receive(fixture("raw-mode-enter.jsonl"));
 

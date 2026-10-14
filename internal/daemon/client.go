@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -72,14 +71,11 @@ func (c Client) Show(ctx context.Context, picture []byte) (*Show, error) {
 		return nil, err
 	}
 	conn.SetDeadline(time.Time{})
-	s := &Show{conn: conn, ended: make(chan struct{})}
+	s := &Show{conn: conn}
 	if resp.Status != nil {
 		s.Status = *resp.Status
 	}
-	go func() {
-		io.Copy(io.Discard, conn) // until the daemon closes the connection
-		close(s.ended)
-	}()
+	s.ended = closedBy(conn)
 	return s, nil
 }
 
@@ -88,7 +84,7 @@ type Show struct {
 	// Status is the daemon's status when the show started.
 	Status host.Status
 	conn   net.Conn
-	ended  chan struct{}
+	ended  <-chan struct{}
 }
 
 // Ended is closed once the daemon ended the show: a newer show replaced it,

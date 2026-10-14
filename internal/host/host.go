@@ -233,8 +233,10 @@ func (h *Host) Tick() {
 	}
 	if h.device != nil {
 		if now := h.clock.Now(); now.Sub(h.lastHeartbeat) >= HeartbeatInterval {
+			silent := now.Sub(h.lastHeartbeat) >= DisconnectedTimeout
 			h.send(protocol.NewHeartbeat(now.UnixMilli()))
 			h.lastHeartbeat = now
+			h.refreshShow(silent)
 		}
 		h.sendShowFrame()
 	}
@@ -386,6 +388,11 @@ func (h *Host) acknowledgeAll() {
 
 // HeartbeatInterval is how often the Host tells a claimed Device it is alive.
 const HeartbeatInterval = time.Second
+
+// DisconnectedTimeout is how long a Device waits for the Host before it shows
+// Disconnected (and leaves Raw Mode). The Device's default, until Preferences
+// carry it (#11).
+const DisconnectedTimeout = 5 * time.Second
 
 // send writes to the claimed Device, if any. A failed write drops the Device;
 // the next Tick claims one again. Callers hold h.mu.

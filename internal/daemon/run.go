@@ -12,8 +12,8 @@ import (
 // (claiming a Device, heartbeats).
 const tickInterval = 100 * time.Millisecond
 
-// showTickInterval replaces tickInterval while a picture is shown, so an
-// animation's frames go out on time: picture.MinDelay is the shortest delay.
+// showTickInterval replaces tickInterval while an animation is shown, so its
+// frames go out on time: picture.MinDelay is the shortest delay.
 const showTickInterval = 10 * time.Millisecond
 
 // Run is the Host Daemon: it ticks h and serves clients on ln until ctx is
@@ -34,7 +34,7 @@ func Run(ctx context.Context, ln net.Listener, h *host.Host) error {
 		for {
 			h.Tick()
 			wait := tickInterval
-			if h.ShowsPicture() {
+			if h.ShowsAnimation() {
 				wait = showTickInterval
 			}
 			select {

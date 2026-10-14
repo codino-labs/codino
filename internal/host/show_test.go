@@ -184,10 +184,10 @@ func TestAnAnimatedGIFLoopsByItsFrameDelays(t *testing.T) {
 	}
 
 	// Red showed from the start; green at 100 ms, blue at 300 ms, then red
-	// again at 600 ms, and so on.
+	// again at 600 ms, and so on; the heartbeat at 1 s resends blue.
 	assertLines(t, frames, []string{
 		solidFrame(green), solidFrame(blue), solidFrame(red),
-		solidFrame(green), solidFrame(blue), solidFrame(red),
+		solidFrame(green), solidFrame(blue), solidFrame(blue), solidFrame(red),
 	})
 }
 
@@ -356,4 +356,32 @@ func TestShowRejectsWhatIsNotAnImage(t *testing.T) {
 			t.Errorf("%s: decoded", name)
 		}
 	}
+}
+
+func TestTheShowComesBackAfterTheHostWentSilentForTheDisconnectedTimeout(t *testing.T) {
+	h, dev, clock := claimedHost(t)
+	show(t, h, decode(t, encodePNG(t, rawFixtureImage())))
+	n := len(dev.Received())
+
+	// A laptop asleep: no Tick, so the Device showed Disconnected and left
+	// Raw Mode.
+	clock.Advance(host.DisconnectedTimeout)
+	h.Tick()
+
+	assertLines(t, since(dev, n+1), []string{
+		fixture(t, "raw-mode-enter.jsonl"),
+		fixture(t, "raw-frame.bin"),
+	})
+}
+
+func TestEveryHeartbeatResendsTheFrameShown(t *testing.T) {
+	h, dev, clock := claimedHost(t)
+	show(t, h, decode(t, encodePNG(t, rawFixtureImage())))
+	n := len(dev.Received())
+
+	clock.Advance(host.HeartbeatInterval)
+	h.Tick()
+
+	// A frame lost or garbled on the way is good again a second later.
+	assertLines(t, since(dev, n+1), []string{fixture(t, "raw-frame.bin")})
 }

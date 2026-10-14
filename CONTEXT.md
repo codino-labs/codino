@@ -113,6 +113,9 @@ _Avoid_: asset pack, skin
 A Theme in which a pixel-art mascot strikes one pose per Session State. Needs a full matrix; Tiles fall back to abstract animation.
 _Avoid_: mascot mode, sprite theme
 
+**Nino**:
+The original mascot of the default Character Theme: a round mint creature with a pink ponytail ("codino"), one pose per Session State. Codino's own; unrelated to Clawd.
+
 **Clawd**:
 The Claude Code pixel mascot. Available only as a separately loaded sprite pack, never distributed with the project, pending permission from Anthropic.
 

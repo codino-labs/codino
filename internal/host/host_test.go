@@ -50,6 +50,9 @@ type fakeDevice struct {
 	// failWrites makes every write fail, like a Device that stopped reading.
 	failWrites  atomic.Bool
 	closingOnce sync.Once
+	// answer, when set, is the Device's reply to each line other than hello
+	// ("" for none).
+	answer func(line string) string
 }
 
 func newFakeDevice(reply ...string) *fakeDevice {
@@ -80,6 +83,10 @@ func (d *fakeDevice) Write(p []byte) (int, error) {
 			}
 			if n := len(d.reply); n == 0 || !strings.Contains(d.reply[n-1], `"hello_reply"`) {
 				d.Close()
+			}
+		} else if d.answer != nil {
+			if reply := d.answer(line); reply != "" {
+				d.toHost <- []byte(reply + "\n")
 			}
 		}
 	}

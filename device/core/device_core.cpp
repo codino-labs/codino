@@ -9,27 +9,22 @@ namespace device {
 
 namespace {
 
-// Everything the core knows about each Session State, in one place.
-// `urgency`: higher wins the Aggregate State (Awaiting Input > Error > Done >
-// Working > Idle). `color`: the v0 solid color for the whole matrix.
+// What the core knows about each Session State beyond its Theme. `urgency`:
+// higher wins the Aggregate State (Awaiting Input > Error > Done > Working >
+// Idle).
 struct SessionStateInfo {
   SessionState state;
-  const char* wireName;
   int urgency;
-  Rgb color;
 };
 
 constexpr SessionStateInfo kSessionStates[] = {
-    {SessionState::Idle, "idle", 0, {16, 16, 24}},
-    {SessionState::Working, "working", 1, {0, 90, 255}},
-    {SessionState::Done, "done", 2, {0, 200, 60}},
-    {SessionState::Error, "error", 3, {255, 0, 0}},
-    {SessionState::AwaitingInput, "awaiting_input", 4, {255, 150, 0}},
+    {SessionState::Idle, 0},  {SessionState::Working, 1},       {SessionState::Done, 2},
+    {SessionState::Error, 3}, {SessionState::AwaitingInput, 4},
 };
 
 const SessionStateInfo* findByWireName(std::string_view name) {
   for (const auto& info : kSessionStates)
-    if (name == info.wireName) return &info;
+    if (name == wireName(info.state)) return &info;
   return nullptr;
 }
 
@@ -37,32 +32,6 @@ const SessionStateInfo& infoFor(SessionState state) {
   for (const auto& info : kSessionStates)
     if (info.state == state) return info;
   return kSessionStates[0];
-}
-
-// Parses a Project Color, "#rrggbb". False when it isn't one.
-bool parseColor(std::string_view text, Rgb& color) {
-  if (text.size() != 7 || text[0] != '#') return false;
-  int channels[3];
-  for (int i = 0; i < 3; ++i) {
-    int value = 0;
-    for (char c : text.substr(1 + 2 * i, 2)) {
-      int digit;
-      if (c >= '0' && c <= '9') digit = c - '0';
-      else if (c >= 'a' && c <= 'f') digit = c - 'a' + 10;
-      else if (c >= 'A' && c <= 'F') digit = c - 'A' + 10;
-      else return false;
-      value = value * 16 + digit;
-    }
-    channels[i] = value;
-  }
-  color = {static_cast<uint8_t>(channels[0]), static_cast<uint8_t>(channels[1]), static_cast<uint8_t>(channels[2])};
-  return true;
-}
-
-// `color` at `level` of its full brightness (255 = unchanged).
-Rgb scaled(Rgb color, int level) {
-  auto channel = [level](uint8_t c) { return static_cast<uint8_t>(c * level / 255); };
-  return {channel(color.r), channel(color.g), channel(color.b)};
 }
 
 // A pulse between brightness `low` and `high` (of 255) with the given period:
@@ -90,8 +59,6 @@ struct LayoutName {
 };
 constexpr LayoutName kLayouts[] = {{Layout::Adaptive, "adaptive"}, {Layout::Aggregate, "aggregate"}};
 
-// The longest Theme name a Device keeps.
-constexpr size_t kMaxThemeName = 32;
 // The shortest Disconnected timeout: the Host sends a heartbeat every second.
 constexpr uint32_t kMinDisconnectedTimeoutMs = 1000;
 
@@ -104,7 +71,7 @@ bool parsePreferences(JsonVariantConst message, const Preferences& defaults, Pre
   if (!theme.isNull()) {
     if (!theme.is<const char*>()) return false;
     std::string_view name = theme.as<const char*>();
-    if (name.empty() || name.size() > kMaxThemeName) return false;
+    if (!isValidName(name)) return false;
     p.theme = std::string(name);
   }
   JsonVariantConst brightness = message["brightness"];
@@ -160,12 +127,13 @@ bool turnsSideways(uint16_t rotation) { return rotation == 90 || rotation == 270
 }  // namespace
 
 DeviceCore::DeviceCore(HardwareProfile profile, std::string firmwareVersion, const Clock& clock,
-                       Preferences preferences, PreferencesCache* cache)
+                       Preferences preferences, PreferencesCache* cache, ThemeStore* store)
     : profile_(std::move(profile)),
       firmwareVersion_(std::move(firmwareVersion)),
       defaults_(preferences),
       clock_(clock),
       cache_(cache),
+      store_(store != nullptr ? store : &memoryStore_),
       preferences_(preferences),
       frame_(profile_.width, profile_.height),
       shown_(profile_.width, profile_.height),
@@ -179,6 +147,11 @@ DeviceCore::DeviceCore(HardwareProfile profile, std::string firmwareVersion, con
       preferences_ = cached;
     }
   }
+  JsonDocument abstract;
+  std::string error;
+  lookUp(InstallKind::Theme, kAbstractTheme, abstract);
+  parseTheme(abstract.as<JsonVariantConst>(), abstract_, error);
+  selectTheme();
   // Defaults that would be refused on the wire are kept as given.
   if (turnsSideways(preferences_.rotation)) {
     frame_ = PixelBuffer(profile_.height, profile_.width);
@@ -207,7 +180,9 @@ std::string DeviceCore::preferencesLine() const {
 void DeviceCore::applyPreferences(const Preferences& preferences) {
   const std::string before = preferencesLine();
   const bool wasSideways = turnsSideways(preferences_.rotation);
+  const bool themeChanged = preferences.theme != preferences_.theme;
   preferences_ = preferences;
+  if (themeChanged) selectTheme();
   if (turnsSideways(preferences_.rotation) != wasSideways) {
     // The picture's width and height swap: Raw Mode's pixels no longer fit.
     frame_ = PixelBuffer(frame_.height(), frame_.width());
@@ -219,6 +194,8 @@ void DeviceCore::applyPreferences(const Preferences& preferences) {
 }
 
 std::string DeviceCore::receive(std::string_view line) {
+  // Longer than a Device's line buffer: a Device never sees it whole.
+  if (line.size() > kMaxLineLength) return {};
   if (!line.empty() && line[0] == kRawFrameStart) {
     receiveRawFrame(line);
     return {};
@@ -256,7 +233,7 @@ std::string DeviceCore::receive(std::string_view line) {
     const int tile = message["tile"] | -1;
     session.tile = tile < 0 ? INT_MAX : tile;
     // Without a valid Project Color, a Takeover shows the Session State's.
-    if (!parseColor(message["project_color"] | "", session.projectColor)) session.projectColor = state->color;
+    session.hasProjectColor = parseColor(message["project_color"] | "", session.projectColor);
   } else if (type == "session_remove") {
     if (!message["id"].is<const char*>()) return {};
     sessions_.erase(std::string(message["id"].as<const char*>()));
@@ -277,6 +254,12 @@ std::string DeviceCore::receive(std::string_view line) {
     raw_.fill(Rgb{});
   } else if (type == "raw_mode_exit") {
     rawMode_ = false;
+  } else if (type == "install") {
+    hostMessage();
+    return install(message.as<JsonVariantConst>());
+  } else if (type == "uninstall") {
+    hostMessage();
+    return uninstall(message.as<JsonVariantConst>());
   } else if (type == "preferences") {
     Preferences received;
     if (!parsePreferences(message.as<JsonVariantConst>(), defaults_, received)) return {};
@@ -315,9 +298,176 @@ std::string DeviceCore::helloReply() const {
   hw["current_cap_ma"] = profile_.currentCapMa;
   hw["button"] = profile_.button;
   hw["imu"] = profile_.imu;
+  addAvailable(reply);
   std::string line;
   serializeJson(reply, line);
   return line;
+}
+
+// --- Themes and Sprite Packs ----------------------------------------------
+
+namespace {
+
+struct KindName {
+  InstallKind kind;
+  const char* wireName;
+};
+constexpr KindName kKinds[] = {{InstallKind::Theme, "theme"}, {InstallKind::SpritePack, "sprite_pack"}};
+
+const KindName* findKind(JsonVariantConst kind) {
+  for (const auto& k : kKinds)
+    if (kind.is<const char*>() && std::string_view(kind.as<const char*>()) == k.wireName) return &k;
+  return nullptr;
+}
+
+const BuiltIn* findBuiltIn(InstallKind kind, std::string_view name) {
+  const BuiltIn* first = kind == InstallKind::Theme ? kBuiltInThemes : kBuiltInSpritePacks;
+  const size_t count = kind == InstallKind::Theme ? kBuiltInThemeCount : kBuiltInSpritePackCount;
+  for (size_t i = 0; i < count; ++i)
+    if (name == first[i].name) return &first[i];
+  return nullptr;
+}
+
+std::pair<InstallKind, std::string> key(InstallKind kind, std::string_view name) { return {kind, std::string(name)}; }
+
+}  // namespace
+
+std::vector<std::string> MemoryThemeStore::names(InstallKind kind) {
+  std::vector<std::string> out;
+  for (const auto& [k, line] : lines_)
+    if (k.first == kind) out.push_back(k.second);
+  return out;
+}
+
+std::string MemoryThemeStore::load(InstallKind kind, std::string_view name) {
+  auto it = lines_.find(key(kind, name));
+  return it == lines_.end() ? std::string() : it->second;
+}
+
+bool MemoryThemeStore::save(InstallKind kind, std::string_view name, std::string_view line) {
+  lines_[key(kind, name)] = std::string(line);
+  return true;
+}
+
+bool MemoryThemeStore::erase(InstallKind kind, std::string_view name) { return lines_.erase(key(kind, name)) == 1; }
+
+bool DeviceCore::lookUp(InstallKind kind, std::string_view name, JsonDocument& doc) const {
+  if (const BuiltIn* builtIn = findBuiltIn(kind, name)) return !deserializeJson(doc, builtIn->json);
+  const std::string line = store_->load(kind, name);
+  return !line.empty() && !deserializeJson(doc, line) && doc.is<JsonObjectConst>();
+}
+
+std::vector<std::string> DeviceCore::available(InstallKind kind) const {
+  std::vector<std::string> out;
+  const BuiltIn* first = kind == InstallKind::Theme ? kBuiltInThemes : kBuiltInSpritePacks;
+  const size_t count = kind == InstallKind::Theme ? kBuiltInThemeCount : kBuiltInSpritePackCount;
+  for (size_t i = 0; i < count; ++i) out.emplace_back(first[i].name);
+  std::vector<std::string> installed = store_->names(kind);
+  std::sort(installed.begin(), installed.end());
+  for (auto& name : installed)
+    if (findBuiltIn(kind, name) == nullptr && isValidName(name)) out.push_back(std::move(name));
+  return out;
+}
+
+void DeviceCore::addAvailable(JsonDocument& reply) const {
+  JsonArray themes = reply["themes"].to<JsonArray>();
+  for (const auto& name : available(InstallKind::Theme)) themes.add(name);
+  JsonArray packs = reply["sprite_packs"].to<JsonArray>();
+  for (const auto& name : available(InstallKind::SpritePack)) packs.add(name);
+}
+
+// The reply to an install or uninstall: refused when `error` says why.
+std::string DeviceCore::installReply(JsonVariantConst message, const std::string& error) const {
+  JsonDocument reply;
+  reply["type"] = "install_reply";
+  reply["kind"] = message["kind"];
+  reply["name"] = message["name"];
+  reply["ok"] = error.empty();
+  if (!error.empty()) reply["error"] = error;
+  addAvailable(reply);
+  std::string line;
+  serializeJson(reply, line);
+  return line;
+}
+
+std::string DeviceCore::install(JsonVariantConst message) {
+  auto answer = [&](const std::string& error) { return installReply(message, error); };
+  const KindName* kind = findKind(message["kind"]);
+  if (kind == nullptr) return answer("kind must be theme or sprite_pack");
+  std::string error, name;
+  if (kind->kind == InstallKind::Theme) {
+    Theme theme;
+    if (!parseTheme(message, theme, error)) return answer(error);
+    name = theme.name;
+  } else {
+    SpritePack pack;
+    if (!parseSpritePack(message, pack, error)) return answer(error);
+    name = pack.name;
+  }
+  if (findBuiltIn(kind->kind, name) != nullptr) return answer("\"" + name + "\" is built in: choose another name");
+  const std::vector<std::string> installed = store_->names(kind->kind);
+  if (std::find(installed.begin(), installed.end(), name) == installed.end() && installed.size() >= kMaxInstalled)
+    return answer("the Device holds " + std::to_string(kMaxInstalled) + " already: uninstall one first");
+  std::string line;
+  serializeJson(message, line);
+  if (!store_->save(kind->kind, name, line)) return answer("the Device couldn't save it");
+  selectTheme();
+  return answer("");
+}
+
+std::string DeviceCore::uninstall(JsonVariantConst message) {
+  auto answer = [&](const std::string& error) { return installReply(message, error); };
+  const KindName* kind = findKind(message["kind"]);
+  if (kind == nullptr) return answer("kind must be theme or sprite_pack");
+  const std::string_view name = message["name"] | "";
+  if (findBuiltIn(kind->kind, name) != nullptr) return answer("built-in ones can't be uninstalled");
+  const std::vector<std::string> installed = store_->names(kind->kind);
+  if (!isValidName(name) || std::find(installed.begin(), installed.end(), name) == installed.end())
+    return answer("not installed");
+  if (!store_->erase(kind->kind, name)) return answer("the Device couldn't remove it");
+  selectTheme();
+  return answer("");
+}
+
+void DeviceCore::selectTheme() {
+  JsonDocument doc;
+  std::string error;
+  Theme theme;
+  if (!lookUp(InstallKind::Theme, preferences_.theme, doc) || !parseTheme(doc.as<JsonVariantConst>(), theme, error)) {
+    lookUp(InstallKind::Theme, kDefaultTheme, doc);
+    parseTheme(doc.as<JsonVariantConst>(), theme, error);
+  }
+  theme_ = std::move(theme);
+  poses_ = {};
+  // Each Sprite Pack is read once; an empty one stands for a missing pack.
+  std::map<std::string, SpritePack> packs;
+  for (size_t i = 0; i < kSessionStateCount; ++i) {
+    const ThemeState& state = theme_.states[i];
+    if (!state.usesSprite) continue;
+    auto it = packs.find(state.sprite.pack);
+    if (it == packs.end()) {
+      SpritePack pack;
+      JsonDocument packDoc;
+      if (!lookUp(InstallKind::SpritePack, state.sprite.pack, packDoc) ||
+          !parseSpritePack(packDoc.as<JsonVariantConst>(), pack, error))
+        pack = SpritePack{};
+      it = packs.emplace(state.sprite.pack, std::move(pack)).first;
+    }
+    const SpritePack& pack = it->second;
+    Pose pose;
+    pose.width = pack.width;
+    pose.height = pack.height;
+    pose.frameMs = state.sprite.frameMs;
+    for (const auto& name : state.sprite.frames) {
+      auto frame = pack.frames.find(name);
+      if (frame == pack.frames.end()) {
+        pose.frames.clear();  // a pose with a frame missing can't show
+        break;
+      }
+      pose.frames.push_back(frame->second);
+    }
+    poses_[i] = std::move(pose);
+  }
 }
 
 // Acknowledge clears Done and restarts Escalation; Awaiting Input stays. An
@@ -405,12 +555,6 @@ DeviceCore::EscalationStep DeviceCore::escalationStep(Session& session) {
 
 namespace {
 
-// Tile animations, in the session's Project Color.
-constexpr int kTileIdle = 32;            // a dim, steady glow
-constexpr int kTileWorkingBase = 80;     // Working: a bright row runs down a dimmer Tile
-constexpr uint32_t kTileWorkingRowMs = 125;
-constexpr uint32_t kTileErrorBlinkMs = 500;  // Error: on, then off, this long each
-
 // How many Tiles the adaptive Layout has room for with n sessions; with nine
 // or more the eighth column is the Overflow Tile, so seven.
 constexpr int kOverflowTile = 7;
@@ -437,19 +581,46 @@ int DeviceCore::awaitingInputLevel(EscalationStep step) {
   }
 }
 
-// The whole matrix shows the Aggregate State. Awaiting Input shows the most
-// insistent step any Awaiting Input session has reached: the faster pulse,
-// then the gentle pulse, then the steady glow.
+void DeviceCore::drawState(Region region, SessionState state, Rgb color, bool wholeMatrix) {
+  const size_t i = stateIndex(state);
+  const uint32_t now = clock_.millis();
+  const Pose& pose = poses_[i];
+  if (wholeMatrix && !pose.frames.empty()) {
+    const std::vector<uint8_t>& pixels = pose.frames[(now / std::max<uint32_t>(pose.frameMs, 1)) % pose.frames.size()];
+    drawSprite(frame_, pixels, pose.width, pose.height, theme_.states[i].palette);
+    return;
+  }
+  // A Character Theme's pose needs the full matrix: elsewhere, and when its
+  // Sprite Pack is missing, the abstract Theme's effect stands in.
+  const ThemeState& shown = theme_.states[i];
+  drawEffect(frame_, region, shown.usesSprite ? abstract_.states[i].effect : shown.effect, color, now);
+}
+
+namespace {
+
+// Dims `region` of `frame` to `level` (of 255): Awaiting Input's Escalation.
+void dim(PixelBuffer& frame, Region region, int level) {
+  for (int y = region.y0; y < region.y1; ++y)
+    for (int x = region.x0; x < region.x1; ++x) {
+      const auto px = static_cast<uint8_t>(x), py = static_cast<uint8_t>(y);
+      frame.set(px, py, scaled(frame.at(px, py), level));
+    }
+}
+
+}  // namespace
+
+// The whole matrix shows the Aggregate State as the Theme does, a pose of a
+// Character Theme included. Awaiting Input shows the most insistent step any
+// Awaiting Input session has reached: the faster pulse, then the gentle
+// pulse, then the steady glow, each dimming the Theme's picture.
 void DeviceCore::renderAggregate(EscalationStep mostInsistent) {
   const SessionState aggregate = aggregateState();
-  const Rgb color = infoFor(aggregate).color;
-  if (preferences_.quietMode && aggregate != SessionState::AwaitingInput) {
-    frame_.fill(Rgb{});  // Quiet Mode shows nothing but Awaiting Input
-  } else if (aggregate == SessionState::AwaitingInput) {
-    frame_.fill(scaled(color, awaitingInputLevel(mostInsistent)));
-  } else {
-    frame_.fill(color);
-  }
+  frame_.fill(Rgb{});
+  // Quiet Mode shows nothing but Awaiting Input.
+  if (preferences_.quietMode && aggregate != SessionState::AwaitingInput) return;
+  const Region whole{0, 0, frame_.width(), frame_.height()};
+  drawState(whole, aggregate, theme_[aggregate].palette[0], true);
+  if (aggregate == SessionState::AwaitingInput) dim(frame_, whole, awaitingInputLevel(mostInsistent));
 }
 
 // One Tile per session where its Tile slot says, when the slot fits the
@@ -491,7 +662,7 @@ void DeviceCore::renderTiles() {
   frame_.fill(Rgb{});
   for (int i = 0; i < room; ++i) {
     if (tiles[i] != nullptr)
-      renderTile(region(i), tiles[i]->state, tiles[i]->projectColor, escalationStep(*tiles[i]));
+      renderTile(region(i), tiles[i]->state, colorOf(*tiles[i]), escalationStep(*tiles[i]));
   }
   if (overflow.empty()) return;
   // The Overflow Tile stands for several projects: it shows the Aggregate
@@ -503,37 +674,20 @@ void DeviceCore::renderTiles() {
     const EscalationStep step = escalationStep(*session);
     if (step.kind > mostInsistent.kind) mostInsistent = step;
   }
-  renderTile(region(kOverflowTile), aggregate, infoFor(aggregate).color, mostInsistent);
+  renderTile(region(kOverflowTile), aggregate, theme_[aggregate].palette[0], mostInsistent);
 }
 
-// A Tile in `color`, animated by `state`.
+// A Tile in `color`, animated by its Session State's effect in the Theme
+// (the abstract Theme's under a Character Theme).
 void DeviceCore::renderTile(Region region, SessionState state, Rgb color, EscalationStep step) {
   // Quiet Mode leaves dark every Tile but those Awaiting Input.
   if (preferences_.quietMode && state != SessionState::AwaitingInput) return;
-  const uint32_t now = clock_.millis();
-  const int height = std::max(region.y1 - region.y0, 1);
-  const int workingRow = region.y0 + static_cast<int>((now / kTileWorkingRowMs) % height);
-  for (int y = region.y0; y < region.y1; ++y) {
-    Rgb pixel;
-    switch (state) {
-      case SessionState::Idle:
-        pixel = scaled(color, kTileIdle);
-        break;
-      case SessionState::Working:
-        pixel = y == workingRow ? color : scaled(color, kTileWorkingBase);
-        break;
-      case SessionState::Done:
-        pixel = color;
-        break;
-      case SessionState::Error:
-        pixel = (now / kTileErrorBlinkMs) % 2 == 0 ? color : Rgb{};
-        break;
-      case SessionState::AwaitingInput:
-        pixel = scaled(color, awaitingInputLevel(step));
-        break;
-    }
-    for (int x = region.x0; x < region.x1; ++x) frame_.set(static_cast<uint8_t>(x), static_cast<uint8_t>(y), pixel);
-  }
+  drawState(region, state, color, false);
+  if (state == SessionState::AwaitingInput) dim(frame_, region, awaitingInputLevel(step));
+}
+
+Rgb DeviceCore::colorOf(const Session& session) const {
+  return session.hasProjectColor ? session.projectColor : theme_[session.state].palette[0];
 }
 
 // A Takeover of any session takes the whole matrix whatever the Layout,
@@ -561,7 +715,7 @@ void DeviceCore::renderFrame() {
   EscalationStep mostInsistent;
   for (auto& [id, session] : sessions_) {
     const EscalationStep step = escalationStep(session);
-    if (step.kind == EscalationStep::Takeover) takeover.push_back(session.projectColor);
+    if (step.kind == EscalationStep::Takeover) takeover.push_back(colorOf(session));
     if (step.kind > mostInsistent.kind) mostInsistent = step;
   }
   if (!takeover.empty()) {

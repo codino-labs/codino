@@ -10,15 +10,19 @@
 // sends it to the Host on stdout.
 //
 // With --preferences-file the Virtual Device keeps its Preferences in that
-// file, as a Device keeps them in flash, and boots with them next time.
+// file, as a Device keeps them in flash, and boots with them next time. With
+// --store-dir it keeps the Themes and Sprite Packs installed on it in that
+// directory (theme/NAME.jsonl, sprite_pack/NAME.jsonl), as a Device keeps them
+// in flash.
 //
-// Usage: virtual-device [--size WxH] [--layout adaptive|aggregate] [--preferences-file PATH]
+// Usage: virtual-device [--size WxH] [--layout adaptive|aggregate] [--preferences-file PATH] [--store-dir DIR]
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -157,6 +161,18 @@ bool parseSize(const char* text, device::HardwareProfile& profile) {
   return true;
 }
 
+// Writes `line` to `path` through a temporary file renamed over it, so a
+// Virtual Device killed mid-write leaves the previous content, never half.
+bool writeAtomically(const std::string& path, std::string_view line) {
+  const std::string temporary = path + ".tmp";
+  {
+    std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+    out << line << '\n';
+    if (!out.flush()) return false;
+  }
+  return std::rename(temporary.c_str(), path.c_str()) == 0;
+}
+
 // The Preferences cache of a Device, in a file: one `preferences` line.
 class FilePreferencesCache : public device::PreferencesCache {
  public:
@@ -169,24 +185,61 @@ class FilePreferencesCache : public device::PreferencesCache {
     return line;
   }
 
-  // Written to a temporary file renamed over the old one, so a Virtual
-  // Device killed mid-write leaves the previous Preferences, never half.
   void save(std::string_view line) override {
-    const std::string temporary = path_ + ".tmp";
-    {
-      std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
-      out << line << '\n';
-      if (!out.flush()) {
-        std::fprintf(stderr, "virtual-device: can't save Preferences to %s\n", temporary.c_str());
-        return;
-      }
-    }
-    if (std::rename(temporary.c_str(), path_.c_str()) != 0)
-      std::fprintf(stderr, "virtual-device: can't save Preferences to %s\n", path_.c_str());
+    if (!writeAtomically(path_, line)) std::fprintf(stderr, "virtual-device: can't save Preferences to %s\n", path_.c_str());
   }
 
  private:
   std::string path_;
+};
+
+// The Themes and Sprite Packs installed on a Device, in a directory: one
+// `install` line per file, DIR/theme/NAME.jsonl and DIR/sprite_pack/NAME.jsonl.
+// The Device core only hands over valid names (a-z, 0-9, - and _), so a name
+// is a safe file name.
+class DirectoryThemeStore : public device::ThemeStore {
+ public:
+  explicit DirectoryThemeStore(std::string dir) : dir_(std::move(dir)) {}
+
+  std::vector<std::string> names(device::InstallKind kind) override {
+    std::vector<std::string> out;
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(folder(kind), ec)) {
+      if (entry.path().extension() == ".jsonl") out.push_back(entry.path().stem().string());
+    }
+    return out;
+  }
+
+  std::string load(device::InstallKind kind, std::string_view name) override {
+    std::ifstream in(path(kind, name), std::ios::binary);
+    std::string line;
+    std::getline(in, line);
+    return line;
+  }
+
+  bool save(device::InstallKind kind, std::string_view name, std::string_view line) override {
+    std::error_code ec;
+    std::filesystem::create_directories(folder(kind), ec);
+    if (ec || !writeAtomically(path(kind, name), line)) {
+      std::fprintf(stderr, "virtual-device: can't save to %s\n", path(kind, name).c_str());
+      return false;
+    }
+    return true;
+  }
+
+  bool erase(device::InstallKind kind, std::string_view name) override {
+    std::error_code ec;
+    return std::filesystem::remove(path(kind, name), ec) && !ec;
+  }
+
+ private:
+  std::string folder(device::InstallKind kind) const {
+    return dir_ + (kind == device::InstallKind::Theme ? "/theme" : "/sprite_pack");
+  }
+  std::string path(device::InstallKind kind, std::string_view name) const {
+    return folder(kind) + "/" + std::string(name) + ".jsonl";
+  }
+  std::string dir_;
 };
 
 // The Layout the Virtual Device boots with, until a Preferences push.
@@ -207,6 +260,7 @@ int main(int argc, char** argv) {
   device::HardwareProfile profile = referenceProfile();
   device::Preferences preferences;
   std::unique_ptr<FilePreferencesCache> cache;
+  std::unique_ptr<DirectoryThemeStore> store;
   for (int i = 1; i < argc; ++i) {
     if (std::strcmp(argv[i], "--size") == 0 && i + 1 < argc && parseSize(argv[i + 1], profile)) {
       ++i;
@@ -214,16 +268,19 @@ int main(int argc, char** argv) {
       ++i;
     } else if (std::strcmp(argv[i], "--preferences-file") == 0 && i + 1 < argc && argv[i + 1][0] != '\0') {
       cache = std::make_unique<FilePreferencesCache>(argv[++i]);
+    } else if (std::strcmp(argv[i], "--store-dir") == 0 && i + 1 < argc && argv[i + 1][0] != '\0') {
+      store = std::make_unique<DirectoryThemeStore>(argv[++i]);
     } else {
       std::fprintf(stderr,
-                   "usage: %s [--size WxH] [--layout adaptive|aggregate] [--preferences-file PATH]   (W, H in 1..64)\n",
+                   "usage: %s [--size WxH] [--layout adaptive|aggregate] [--preferences-file PATH] [--store-dir DIR]"
+                   "   (W, H in 1..64)\n",
                    argv[0]);
       return 2;
     }
   }
 
   SteadyClock clock;
-  device::DeviceCore core(profile, kFirmwareVersion, clock, preferences, cache.get());
+  device::DeviceCore core(profile, kFirmwareVersion, clock, preferences, cache.get(), store.get());
 
   device::PixelBuffer shown = core.render();
   draw(shown, "(start)");

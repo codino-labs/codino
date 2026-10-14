@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"github.com/codino-labs/codino/internal/host"
+	"github.com/codino-labs/codino/internal/protocol"
 )
 
 // Op names what a Request asks for.
@@ -15,6 +16,11 @@ const (
 	// started, and the daemon closes the connection once it ended (the
 	// client half-closed it, a newer show replaced it, or the daemon exits).
 	OpShow Op = "show"
+	// OpInstall installs the Theme or Sprite Pack file Request.Install on
+	// the Device; OpUninstall removes Request.Kind Request.Name. The reply
+	// carries the Device's InstallReply.
+	OpInstall   Op = "install"
+	OpUninstall Op = "uninstall"
 )
 
 // MaxPicture bounds the encoded picture an OpShow request carries.
@@ -28,6 +34,11 @@ type Request struct {
 	Events []host.Event `json:"events,omitempty"`
 	// Picture is an encoded PNG, JPEG or GIF for OpShow.
 	Picture []byte `json:"picture,omitempty"`
+	// Install is a Theme or Sprite Pack file for OpInstall.
+	Install []byte `json:"install,omitempty"`
+	// Kind and Name are what OpUninstall removes.
+	Kind protocol.Kind `json:"kind,omitempty"`
+	Name string        `json:"name,omitempty"`
 }
 
 // Response answers a Request.
@@ -39,4 +50,7 @@ type Response struct {
 	// have ended an unknown session, so delivering it again is harmless.
 	Retiring bool         `json:"retiring,omitempty"`
 	Status   *host.Status `json:"status,omitempty"`
+	// NoDevice means OpInstall or OpUninstall found no Device claimed.
+	NoDevice     bool                   `json:"no_device,omitempty"`
+	InstallReply *protocol.InstallReply `json:"install_reply,omitempty"`
 }

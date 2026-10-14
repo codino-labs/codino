@@ -1,0 +1,26 @@
+{
+  "kind": "theme",
+  "name": "my-character",
+  "states": {
+    "idle": {
+      "palette": ["#8080c0", "#0b3029", "#3a1530", "#03100d", "#202040"],
+      "sprite": {"pack": "my-pack", "frames": ["idle-1", "idle-2"], "frame_ms": 1500}
+    },
+    "working": {
+      "palette": ["#005aff", "#2ec4a0", "#ff5fa2"],
+      "sprite": {"pack": "my-pack", "frames": ["working-1", "working-2", "working-3", "working-2"], "frame_ms": 300}
+    },
+    "awaiting_input": {
+      "palette": ["#ff9600", "#2ec4a0", "#ff5fa2"],
+      "sprite": {"pack": "my-pack", "frames": ["awaiting-1", "awaiting-2"], "frame_ms": 400}
+    },
+    "done": {
+      "palette": ["#00c83c", "#2ec4a0", "#ff5fa2"],
+      "sprite": {"pack": "my-pack", "frames": ["done-1", "done-2"], "frame_ms": 700}
+    },
+    "error": {
+      "palette": ["#ff0000", "#a83226", "#ff5fa2"],
+      "sprite": {"pack": "my-pack", "frames": ["error-1", "error-2"], "frame_ms": 250}
+    }
+  }
+}

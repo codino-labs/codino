@@ -9,6 +9,8 @@ type Status struct {
 	Device         DeviceConnection `json:"device"`
 	// Showing is true while a picture is shown in Raw Mode (`codino show`).
 	Showing bool `json:"showing"`
+	// Theme is the theme Preference in force.
+	Theme string `json:"theme"`
 	// PreferencesProblem is why the config file is ignored (it is invalid);
 	// empty when its Preferences are in force.
 	PreferencesProblem string `json:"preferences_problem,omitempty"`
@@ -38,6 +40,9 @@ type DeviceConnection struct {
 	Protocol int    `json:"protocol"`
 	// Problem explains why no Device is claimed, e.g. a firmware to update.
 	Problem string `json:"problem,omitempty"`
+	// Themes and SpritePacks the claimed Device has, built-in ones first.
+	Themes      []string `json:"themes,omitempty"`
+	SpritePacks []string `json:"sprite_packs,omitempty"`
 }
 
 // Status reports the sessions, by Tile slot, and the Device connection.
@@ -46,7 +51,7 @@ func (h *Host) Status() Status {
 	defer h.unlock()
 	h.dropGoneDevice()
 	st := Status{AggregateState: h.sessions.aggregateState(), Sessions: []SessionSummary{}, Showing: h.showing != nil,
-		PreferencesProblem: h.prefsProblem}
+		PreferencesProblem: h.prefsProblem, Theme: h.prefs.Theme}
 	for _, s := range h.sessions.ordered() {
 		st.Sessions = append(st.Sessions, SessionSummary{
 			ID: s.id, State: s.state, StateEntered: s.stateEntered,
@@ -60,6 +65,9 @@ func (h *Host) Status() Status {
 			Name:     h.device.Name,
 			Firmware: h.device.HelloReply.Firmware,
 			Protocol: h.device.HelloReply.Protocol,
+
+			Themes:      h.deviceHas.themes,
+			SpritePacks: h.deviceHas.spritePacks,
 		}
 	} else {
 		st.Device.Problem = h.deviceProblem

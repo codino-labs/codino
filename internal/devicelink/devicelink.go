@@ -61,6 +61,7 @@ type Device struct {
 	gone         chan struct{}
 	once         sync.Once
 	acknowledged chan struct{}
+	installed    chan protocol.InstallReply
 }
 
 // Claim tries every candidate in order and returns the first one that answers
@@ -139,13 +140,14 @@ func handshake(c Candidate, now time.Time) (*Device, error) {
 		return nil, &VersionMismatchError{Candidate: c.Name, Device: reply.Protocol}
 	}
 
-	dev := &Device{Name: c.Name, HelloReply: reply, port: port, gone: make(chan struct{}), acknowledged: make(chan struct{}, 1)}
+	dev := &Device{Name: c.Name, HelloReply: reply, port: port, gone: make(chan struct{}), acknowledged: make(chan struct{}, 1),
+		installed: make(chan protocol.InstallReply, 1)}
 	go dev.drain(lines)
 	return dev, nil
 }
 
-// drain reads what the Device sends after the handshake, an Acknowledge
-// from the human, until the Device goes away.
+// drain reads what the Device sends after the handshake (an Acknowledge
+// from the human, the reply to an install) until the Device goes away.
 func (d *Device) drain(lines *bufio.Reader) {
 	for {
 		line, err := lines.ReadBytes('\n')
@@ -159,12 +161,23 @@ func (d *Device) drain(lines *bufio.Reader) {
 			default: // one is pending already: Acknowledging twice is once
 			}
 		}
+		if reply, err := protocol.DecodeInstallReply(line); err == nil {
+			select {
+			case <-d.installed: // nobody waited for the previous one
+			default:
+			}
+			d.installed <- reply
+		}
 	}
 }
 
 // Acknowledged receives once the human Acknowledges on the Device (a button
 // press or a double tap), for every session.
 func (d *Device) Acknowledged() <-chan struct{} { return d.acknowledged }
+
+// InstallReplies receives the Device's answer to each install and
+// uninstall. Only the latest one waits to be received.
+func (d *Device) InstallReplies() <-chan protocol.InstallReply { return d.installed }
 
 // WriteTimeout bounds one write to a Device that stopped reading, on
 // transports that support write deadlines.

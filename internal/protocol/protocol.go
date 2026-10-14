@@ -39,6 +39,10 @@ type HelloReply struct {
 	Protocol        int             `json:"protocol"`
 	Firmware        string          `json:"firmware"`
 	HardwareProfile HardwareProfile `json:"hardware_profile"`
+	// Themes and SpritePacks the Device has, built-in ones first; empty
+	// from a Device that predates Themes.
+	Themes      []string `json:"themes,omitempty"`
+	SpritePacks []string `json:"sprite_packs,omitempty"`
 }
 
 // SessionUpsert creates or replaces one Agent Session on the Device.
@@ -159,8 +163,11 @@ func NewRawModeExit() RawModeExit { return RawModeExit{Type: "raw_mode_exit"} }
 
 // Encode renders a message as one protocol line, newline included.
 func Encode(msg any) ([]byte, error) {
-	if f, ok := msg.(RawFrame); ok {
-		return f.line, nil
+	switch m := msg.(type) {
+	case RawFrame:
+		return m.line, nil
+	case Install:
+		return m.line, nil
 	}
 	line, err := json.Marshal(msg)
 	if err != nil {
@@ -193,6 +200,8 @@ func DecodeHelloReply(line []byte) (HelloReply, error) {
 		Protocol        *int             `json:"protocol"`
 		Firmware        *string          `json:"firmware"`
 		HardwareProfile *HardwareProfile `json:"hardware_profile"`
+		Themes          []string         `json:"themes"`
+		SpritePacks     []string         `json:"sprite_packs"`
 	}
 	if err := json.Unmarshal(line, &raw); err != nil || raw.Type == nil || *raw.Type != "hello_reply" {
 		return HelloReply{}, ErrNotHelloReply
@@ -205,5 +214,7 @@ func DecodeHelloReply(line []byte) (HelloReply, error) {
 		Protocol:        *raw.Protocol,
 		Firmware:        *raw.Firmware,
 		HardwareProfile: *raw.HardwareProfile,
+		Themes:          raw.Themes,
+		SpritePacks:     raw.SpritePacks,
 	}, nil
 }

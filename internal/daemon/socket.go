@@ -15,6 +15,7 @@ import (
 
 	"github.com/codino-labs/codino/internal/host"
 	"github.com/codino-labs/codino/internal/picture"
+	"github.com/codino-labs/codino/internal/protocol"
 )
 
 // ErrAlreadyRunning means another Host Daemon owns the socket.
@@ -116,6 +117,12 @@ func serveConn(ctx context.Context, conn net.Conn, h *host.Host) {
 		serveShow(ctx, conn, req, h)
 		return
 	}
+	if err == nil && (req.Op == OpInstall || req.Op == OpUninstall) {
+		// The Device writes its flash before it replies.
+		conn.SetDeadline(time.Now().Add(InstallTimeout))
+		reply(conn, serveInstall(ctx, req, h))
+		return
+	}
 	var resp Response
 	if err != nil {
 		resp.Error = fmt.Sprintf("bad request: %v", err)
@@ -169,6 +176,33 @@ func serveShow(ctx context.Context, conn net.Conn, req Request, h *host.Host) {
 	case <-showing.Ended():
 	case <-ctx.Done():
 	}
+}
+
+// installReplyTimeout is how long the daemon waits for the Device's reply
+// to an install, within the client's InstallTimeout.
+const installReplyTimeout = 3 * time.Second
+
+func serveInstall(ctx context.Context, req Request, h *host.Host) Response {
+	ctx, cancel := context.WithTimeout(ctx, installReplyTimeout)
+	defer cancel()
+	var reply protocol.InstallReply
+	var err error
+	if req.Op == OpInstall {
+		var install protocol.Install
+		if install, err = protocol.NewInstall(req.Install); err != nil {
+			return Response{Error: err.Error()}
+		}
+		reply, err = h.Install(ctx, install)
+	} else {
+		reply, err = h.Uninstall(ctx, req.Kind, req.Name)
+	}
+	if errors.Is(err, host.ErrNoDevice) {
+		return Response{NoDevice: true}
+	}
+	if err != nil {
+		return Response{Error: err.Error()}
+	}
+	return Response{InstallReply: &reply}
 }
 
 func handle(req Request, h *host.Host) Response {

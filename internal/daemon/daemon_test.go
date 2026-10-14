@@ -354,3 +354,30 @@ func TestShowRefusesWhatIsNotAPicture(t *testing.T) {
 		t.Error("Show accepted text")
 	}
 }
+
+func TestInstallWithoutADeviceSaysSo(t *testing.T) {
+	paths := daemon.PathsIn(filepath.Join(t.TempDir(), "rt"))
+	serve(t, listen(t, paths))
+
+	_, err := daemon.Client{Paths: paths}.Install(context.Background(), []byte(`{"kind":"theme","name":"ember"}`))
+
+	if !errors.Is(err, daemon.ErrNoDevice) {
+		t.Errorf("Install: err = %v, want ErrNoDevice", err)
+	}
+	_, err = daemon.Client{Paths: paths}.Uninstall(context.Background(), "theme", "ember")
+	if !errors.Is(err, daemon.ErrNoDevice) {
+		t.Errorf("Uninstall: err = %v, want ErrNoDevice", err)
+	}
+}
+
+func TestInstallRefusesWhatIsNoThemeOrSpritePackWithoutCallingTheDaemon(t *testing.T) {
+	paths := daemon.PathsIn(filepath.Join(t.TempDir(), "rt"))
+	client := daemon.Client{Paths: paths, Spawn: func() error {
+		t.Error("Install spawned a daemon for a file that is no Theme")
+		return nil
+	}}
+
+	if _, err := client.Install(context.Background(), []byte(`{"kind":"font"}`)); err == nil {
+		t.Error("Install accepted a file that is no Theme")
+	}
+}

@@ -5,21 +5,16 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <map>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "pixels.h"
+#include "theme.h"
+
 namespace device {
-
-enum class SessionState { Idle, Working, AwaitingInput, Done, Error };
-
-struct Rgb {
-  uint8_t r = 0, g = 0, b = 0;
-
-  friend bool operator==(Rgb lhs, Rgb rhs) { return lhs.r == rhs.r && lhs.g == rhs.g && lhs.b == rhs.b; }
-  friend bool operator!=(Rgb lhs, Rgb rhs) { return !(lhs == rhs); }
-};
 
 // Describes a physical build. Flashed with the firmware; reported in the
 // handshake reply.
@@ -40,29 +35,6 @@ class Clock {
  public:
   virtual ~Clock() = default;
   virtual uint32_t millis() const = 0;
-};
-
-// Logical pixels, row-major from the top-left. Mapping to the physical wiring
-// (serpentine, color order) is the firmware shell's job.
-class PixelBuffer {
- public:
-  PixelBuffer(uint8_t width, uint8_t height) : width_(width), height_(height), pixels_(width * height) {}
-
-  uint8_t width() const { return width_; }
-  uint8_t height() const { return height_; }
-  Rgb at(uint8_t x, uint8_t y) const { return pixels_[y * width_ + x]; }
-  void fill(Rgb color) { pixels_.assign(pixels_.size(), color); }
-  void set(uint8_t x, uint8_t y, Rgb color) { pixels_[y * width_ + x] = color; }
-
-  friend bool operator==(const PixelBuffer& lhs, const PixelBuffer& rhs) {
-    return lhs.width_ == rhs.width_ && lhs.height_ == rhs.height_ && lhs.pixels_ == rhs.pixels_;
-  }
-  friend bool operator!=(const PixelBuffer& lhs, const PixelBuffer& rhs) { return !(lhs == rhs); }
-
- private:
-  uint8_t width_;
-  uint8_t height_;
-  std::vector<Rgb> pixels_;
 };
 
 // How Awaiting Input escalates the longer it goes unacknowledged. The
@@ -100,9 +72,9 @@ constexpr uint32_t kDefaultDisconnectedTimeoutMs = 5000;
 // `preferences` message) and cached on the Device. The Host keeps the others
 // (Done decay, pinned Project Colors).
 struct Preferences {
-  // The Theme's name. Kept and cached; v0 renders every Theme alike until
-  // Themes land (#12).
-  std::string theme = "default";
+  // The name of the Theme the Device renders by: a built-in one or one
+  // installed. A Theme the Device doesn't have shows as the default one.
+  std::string theme = kDefaultTheme;
   // Percent (1-100) of the Hardware Profile's brightness cap: 100 is the cap.
   uint8_t brightness = 100;
   Layout layout = Layout::Adaptive;
@@ -128,14 +100,54 @@ class PreferencesCache {
   virtual void save(std::string_view line) = 0;
 };
 
+// What a Device can install: a Theme, or a Sprite Pack a Theme draws from.
+enum class InstallKind { Theme, SpritePack };
+
+// Where the firmware shell keeps installed Themes and Sprite Packs across
+// reboots (flash on a Device, a directory on the terminal Virtual Device).
+// Each is one `install` protocol line under its kind and name. The Device core
+// does no I/O: it lists them when constructed and loads one when it needs it.
+class ThemeStore {
+ public:
+  virtual ~ThemeStore() = default;
+  virtual std::vector<std::string> names(InstallKind kind) = 0;
+  // The line saved under `name`; empty when there is none.
+  virtual std::string load(InstallKind kind, std::string_view name) = 0;
+  // Replaces what is saved under `name`. False when it couldn't be saved.
+  virtual bool save(InstallKind kind, std::string_view name, std::string_view line) = 0;
+  // False when it couldn't be removed.
+  virtual bool erase(InstallKind kind, std::string_view name) = 0;
+};
+
+// Themes and Sprite Packs kept in RAM only: a Device without storage keeps
+// what it was sent until it reboots.
+class MemoryThemeStore : public ThemeStore {
+ public:
+  std::vector<std::string> names(InstallKind kind) override;
+  std::string load(InstallKind kind, std::string_view name) override;
+  bool save(InstallKind kind, std::string_view name, std::string_view line) override;
+  bool erase(InstallKind kind, std::string_view name) override;
+
+ private:
+  std::map<std::pair<InstallKind, std::string>, std::string> lines_;
+};
+
 class DeviceCore {
  public:
   static constexpr int kProtocolVersion = 0;
 
   // `preferences` are the defaults; Preferences in `cache` (if any) win, so a
-  // Device boots with the user's choices before a Host connects.
+  // Device boots with the user's choices before a Host connects. Themes and
+  // Sprite Packs are installed into `store` (RAM only when there is none).
+  // The firmware may hold at most kMaxInstalled of each kind besides its
+  // built-in ones.
   DeviceCore(HardwareProfile profile, std::string firmwareVersion, const Clock& clock,
-             Preferences preferences = {}, PreferencesCache* cache = nullptr);
+             Preferences preferences = {}, PreferencesCache* cache = nullptr, ThemeStore* store = nullptr);
+
+  static constexpr size_t kMaxInstalled = 8;
+  // The longest protocol line a Device takes: an `install` with a Sprite
+  // Pack is the longest message.
+  static constexpr size_t kMaxLineLength = 8192;
 
   // The Preferences the Device renders by.
   const Preferences& preferences() const { return preferences_; }
@@ -164,6 +176,20 @@ class DeviceCore {
  private:
   SessionState aggregateState() const;
   std::string helloReply() const;
+  // The names of the Themes or Sprite Packs the Device has, built-in first.
+  std::vector<std::string> available(InstallKind kind) const;
+  void addAvailable(JsonDocument& reply) const;
+
+  // install and uninstall: the reply to send back.
+  std::string install(JsonVariantConst message);
+  std::string uninstall(JsonVariantConst message);
+  std::string installReply(JsonVariantConst message, const std::string& error) const;
+  // Reads the Theme named by the Preferences (or the default one), and the
+  // Sprite Pack frames it uses, into theme_ and poses_.
+  void selectTheme();
+  // The Theme or Sprite Pack `name` as JSON (built-in or installed) into
+  // `doc`; false when the Device has none of that name.
+  bool lookUp(InstallKind kind, std::string_view name, JsonDocument& doc) const;
 
   HardwareProfile profile_;
   std::string firmwareVersion_;
@@ -183,6 +209,23 @@ class DeviceCore {
 
   const Clock& clock_;
   PreferencesCache* cache_;
+  MemoryThemeStore memoryStore_;
+  ThemeStore* store_;
+  // The Theme rendered by and, per Session State, the frames of its pose
+  // (none when the state is an effect, or its Sprite Pack is missing). The
+  // abstract Theme's effects stand in for a pose wherever it can't show.
+  Theme theme_;
+  Theme abstract_;
+  struct Pose {
+    uint8_t width = 0, height = 0;
+    std::vector<std::vector<uint8_t>> frames;
+    uint32_t frameMs = 500;
+  };
+  std::array<Pose, kSessionStateCount> poses_;
+  // Draws how the Theme shows `state` over `region` in `color`: its pose
+  // when the region is the whole matrix and it has one, else its effect, or
+  // the abstract Theme's for a pose.
+  void drawState(Region region, SessionState state, Rgb color, bool wholeMatrix);
   Preferences preferences_;
   // The frame being rendered, in the orientation the picture is seen in
   // (width and height swapped when turned by 90 or 270 degrees), and the
@@ -191,6 +234,8 @@ class DeviceCore {
   PixelBuffer shown_;
   struct Session {
     SessionState state = SessionState::Idle;
+    // Without a valid Project Color the session shows its Session State's.
+    bool hasProjectColor = false;
     Rgb projectColor;
     // Tile slot from the Host: where the session goes in the adaptive Layout.
     int tile = 0;
@@ -210,13 +255,11 @@ class DeviceCore {
   };
   EscalationStep escalationStep(Session& session);
   static int awaitingInputLevel(EscalationStep step);
-  // A region of the matrix: columns [x0, x1), rows [y0, y1).
-  struct Region {
-    int x0, y0, x1, y1;
-  };
   void renderAggregate(EscalationStep mostInsistent);
   void renderTiles();
   void renderTile(Region region, SessionState state, Rgb color, EscalationStep step);
+  // The session's Project Color, or its Session State's own color.
+  Rgb colorOf(const Session& session) const;
   // Acknowledges the session at clock time `at`.
   void acknowledge(Session& session, uint32_t at);
   void heardHostTime(int64_t hostTime);

@@ -69,6 +69,11 @@ type Host struct {
 	// index of its frame the Device has, -1 for none.
 	showing    *Showing
 	shownFrame int
+
+	// installMu keeps installs one at a time: each waits for its reply.
+	installMu sync.Mutex
+	// deviceHas is what the claimed Device has installed.
+	deviceHas has
 }
 
 // TranscriptProbe reads an Agent's transcript for what no hook reports.
@@ -370,6 +375,7 @@ func (h *Host) claim() {
 	}
 	slog.Info("Device claimed", "device", dev.Name, "firmware", dev.HelloReply.Firmware)
 	h.device = dev
+	h.deviceHas = hasOf(dev)
 	h.deviceProblem = ""
 	h.lastFailedClaim = time.Time{}
 	h.lastHeartbeat = now // hello counts as one

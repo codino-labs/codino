@@ -70,7 +70,7 @@ func TestWithoutAConfigFileThePreferencesAreTheDefaults(t *testing.T) {
 }
 
 const fullConfig = `# My Preferences
-theme = "default"
+theme = "my-clawd"
 brightness = 40      # percent of the cap
 layout = "aggregate"
 rotation = 270
@@ -92,7 +92,7 @@ func TestTheConfigFileSetsEveryPreference(t *testing.T) {
 	got := load(t, configFile(t, fullConfig))
 
 	want := preferences.Preferences{
-		Theme:               "default",
+		Theme:               "my-clawd",
 		Brightness:          40,
 		Layout:              preferences.Aggregate,
 		Rotation:            270,
@@ -150,6 +150,8 @@ func TestAnInvalidConfigFileIsReportedWithTheLineAtFault(t *testing.T) {
 		{"rotation off the quarter turns", "rotation = 45", "rotation"},
 		{"quiet_mode not a bool", `quiet_mode = "yes"`, "quiet_mode"},
 		{"theme empty", `theme = ""`, "theme"},
+		{"theme not a Theme name", `theme = "My Theme"`, "theme"},
+		{"theme too long", `theme = "` + strings.Repeat("t", 33) + `"`, "theme"},
 		{"duration without a unit", `done_decay = "10"`, "done_decay"},
 		{"duration as a number", `done_decay = 600`, "done_decay"},
 		{"Disconnected timeout too short", `disconnected_timeout = "1s"`, "disconnected_timeout"},
@@ -360,7 +362,7 @@ func TestGetGivesTheCurrentValueOfEveryPreference(t *testing.T) {
 	}
 
 	want := []preferences.Entry{
-		{Key: "theme", Value: "default"},
+		{Key: "theme", Value: "my-clawd"},
 		{Key: "brightness", Value: "40"},
 		{Key: "layout", Value: "aggregate"},
 		{Key: "rotation", Value: "270"},

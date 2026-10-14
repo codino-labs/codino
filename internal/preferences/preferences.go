@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/codino-labs/codino/internal/protocol"
 )
 
 // Layout is how the matrix area is used.
@@ -40,7 +42,9 @@ type Escalation struct {
 
 // Preferences are the user's choices about how states look and behave.
 type Preferences struct {
-	// Theme is the Theme's name. Only "default" until Themes land (#12).
+	// Theme is the name of the Theme the Device renders by: a built-in one
+	// ("default", the Character Theme, or "minimal") or one installed on the
+	// Device (`codino theme install`). A Device without it shows "default".
 	Theme string
 	// Brightness is a percentage (1-100) of the Hardware Profile's
 	// brightness cap, which the Device enforces whatever this says.
@@ -74,9 +78,6 @@ func Defaults() Preferences {
 		ProjectColors:       map[string]string{},
 	}
 }
-
-// Themes are the Theme names a Preference may give.
-var themes = []string{"default"}
 
 // Bounds of the durations.
 const (
@@ -119,13 +120,11 @@ var preferenceTable = []preference{
 		path: []string{"theme"}, kind: stringKind,
 		get: func(p Preferences) value { return value{kind: stringValue, text: p.Theme} },
 		set: func(p *Preferences, v value) error {
-			for _, t := range themes {
-				if v.text == t {
-					p.Theme = v.text
-					return nil
-				}
+			if !protocol.ValidName(v.text) {
+				return fmt.Errorf("want a Theme name (1-32 of a-z, 0-9, - and _), got %q", v.text)
 			}
-			return fmt.Errorf("want one of %s, got %q", strings.Join(themes, ", "), v.text)
+			p.Theme = v.text
+			return nil
 		},
 	},
 	{

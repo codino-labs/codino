@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/codino-labs/codino/internal/host"
+	"github.com/codino-labs/codino/internal/protocol"
 )
 
 // Timeout bounds every client call, spawning included: a client never blocks
@@ -49,6 +50,57 @@ func (c Client) Status(ctx context.Context) (host.Status, error) {
 		return host.Status{}, errors.New("status: empty reply")
 	}
 	return *resp.Status, nil
+}
+
+// Wake is Status from a Host Daemon it spawns when none is running, for a
+// command that needs the Device even when no Agent Session is.
+func (c Client) Wake(ctx context.Context) (host.Status, error) {
+	resp, err := c.call(ctx, Request{Op: OpStatus}, c.Spawn)
+	if err != nil {
+		return host.Status{}, err
+	}
+	if resp.Status == nil {
+		return host.Status{}, errors.New("status: empty reply")
+	}
+	return *resp.Status, nil
+}
+
+// ErrNoDevice means the Host Daemon has no Device claimed to install on.
+var ErrNoDevice = errors.New("no Device connected")
+
+// InstallTimeout bounds an install or uninstall: the Device writes its
+// flash before it replies.
+const InstallTimeout = 5 * time.Second
+
+// Install installs a Theme or Sprite Pack file on the Device, spawning the
+// Host Daemon when it isn't running, and returns the Device's reply. A file
+// that can't be a Theme or Sprite Pack fails before any daemon is called.
+func (c Client) Install(ctx context.Context, file []byte) (protocol.InstallReply, error) {
+	if _, err := protocol.NewInstall(file); err != nil {
+		return protocol.InstallReply{}, err
+	}
+	return c.install(ctx, Request{Op: OpInstall, Install: file})
+}
+
+// Uninstall removes an installed Theme or Sprite Pack from the Device.
+func (c Client) Uninstall(ctx context.Context, kind protocol.Kind, name string) (protocol.InstallReply, error) {
+	return c.install(ctx, Request{Op: OpUninstall, Kind: kind, Name: name})
+}
+
+func (c Client) install(ctx context.Context, req Request) (protocol.InstallReply, error) {
+	ctx, cancel := context.WithTimeout(ctx, InstallTimeout)
+	defer cancel()
+	resp, err := c.call(ctx, req, c.Spawn)
+	if err != nil {
+		return protocol.InstallReply{}, err
+	}
+	if resp.NoDevice {
+		return protocol.InstallReply{}, ErrNoDevice
+	}
+	if resp.InstallReply == nil {
+		return protocol.InstallReply{}, errors.New("install: empty reply")
+	}
+	return *resp.InstallReply, nil
 }
 
 // ErrNotRunning means no Host Daemon answered and none was spawned.
@@ -114,10 +166,14 @@ func (c Client) call(ctx context.Context, req Request, spawn func() error) (Resp
 	return resp, nil
 }
 
-// open is call that leaves the connection open for the caller to close.
+// open is call that leaves the connection open for the caller to close. A
+// ctx without a deadline gets Timeout.
 func (c Client) open(ctx context.Context, req Request, spawn func() error) (net.Conn, Response, error) {
-	ctx, cancel := context.WithTimeout(ctx, Timeout)
-	defer cancel()
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, Timeout)
+		defer cancel()
+	}
 	retry := time.NewTicker(20 * time.Millisecond)
 	defer retry.Stop()
 	spawned := false

@@ -63,6 +63,7 @@ func withPreferences(change func(*preferences.Preferences)) host.Option {
 // fixturePreferences are the Preferences protocol/fixtures/preferences.jsonl
 // carries.
 func fixturePreferences(p *preferences.Preferences) {
+	p.Theme = "minimal"
 	p.Brightness = 50
 	p.Layout = preferences.Aggregate
 	p.Rotation = 180

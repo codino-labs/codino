@@ -12,16 +12,19 @@ endif()
 set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 # Device core: portable C++17, no Arduino or FastLED dependencies.
-add_library(device_core STATIC core/device_core.cpp)
+add_library(device_core STATIC core/device_core.cpp core/theme.cpp core/builtin_themes.cpp)
 target_include_directories(device_core PUBLIC core)
 target_include_directories(device_core SYSTEM PUBLIC third_party)
 
 # Native Device core tests (doctest).
 enable_testing()
-add_executable(device_core_test test/main.cpp test/device_core_test.cpp)
+add_executable(device_core_test test/main.cpp test/device_core_test.cpp test/theme_test.cpp
+  test/theme_snapshot_test.cpp)
 target_link_libraries(device_core_test PRIVATE device_core)
 target_compile_definitions(device_core_test PRIVATE
-  PROTOCOL_FIXTURES_DIR="${REPO_ROOT}/protocol/fixtures")
+  PROTOCOL_FIXTURES_DIR="${REPO_ROOT}/protocol/fixtures"
+  GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/golden"
+  THEME_EXAMPLES_DIR="${REPO_ROOT}/themes/examples")
 add_test(NAME device_core_test COMMAND device_core_test)
 
 # Terminal Virtual Device.

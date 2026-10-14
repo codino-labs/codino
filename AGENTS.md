@@ -30,7 +30,7 @@ Run a single test with `go test -race ./internal/host -run 'TestReplug'`.
 ### Packages
 
 ```
-cmd/codino/          the one binary: CLI (`event`, `show`, `get`/`set`/`unset`, `status`), the Host Daemon (`daemon`) and `hook` (internal, run by the plugin)
+cmd/codino/          the one binary: CLI (`event`, `show`, `get`/`set`/`unset`, `status`, `theme`), the Host Daemon (`daemon`) and `hook` (internal, run by the plugin)
 internal/claudecode/ Claude Code Adapter: hook JSON → host.Events; transcript probe (interrupts, last write)
 internal/host/       Host core: Session Tracker, Aggregate State, Done decay, Acknowledge, Device Link driving, heartbeat, exit grace, stuck-session cleanup; clock and probes injected
 internal/gitrepo/    repo root of a project directory (worktrees share the main repo's), read from git's files without running git
@@ -112,13 +112,14 @@ cd "$(mktemp -d)" && claude --plugin-dir ~/code/claudino/plugin   # or: -p "say 
 ```
 device/
   core/              Device core: protocol messages + Clock in, PixelBuffer out
-  test/              native Device core tests (doctest)
+                     (theme.*: the Theme interpreter; builtin_themes.cpp: the built-in Themes as data)
+  test/              native Device core tests (doctest); golden/: Theme snapshot golden frames
   virtual/terminal/  terminal Virtual Device (stdin/stdout protocol, matrix on stderr)
   third_party/       vendored single headers (ArduinoJson, doctest), see its README
 ```
 
 - **The Device core stays portable.** C++17 and the standard library plus ArduinoJson only: no Arduino core, FastLED or OS calls, because the same code builds for the firmware, the terminal and the browser. Hardware, time and I/O come in through the constructor (`HardwareProfile`, `Clock`) or `receive()`.
-- **Test at the seam.** Feed protocol lines (prefer the fixtures), `acknowledge()` presses and fake clock ticks; assert on `render()`'s pixel buffer with semantic checks ("the whole matrix is one lit color", "same frame as a lone Awaiting Input session"), not golden frames or private state. No test sleeps.
+- **Test at the seam.** Feed protocol lines (prefer the fixtures), `acknowledge()` presses and fake clock ticks; assert on `render()`'s pixel buffer with semantic checks ("the whole matrix is one lit color", "same frame as a lone Awaiting Input session"), not golden frames or private state. No test sleeps. The one exception is `theme_snapshot_test.cpp`: golden frames of every built-in Theme × Session State (whole matrix 8×8 and 16×16, and a Tile) in `device/test/golden/`. When a change is meant to change how a built-in Theme looks, regenerate them with `make -C device update-goldens` and review the diff; never to make a failing test pass otherwise.
 - **Names** follow `CONTEXT.md` (`SessionState::AwaitingInput`, `aggregateState`, `HardwareProfile`). The product name stays out of identifiers: the namespace is `device`.
 
 A change is done when this exits 0 (needs `cmake` and a C++17 compiler):
@@ -140,6 +141,8 @@ Raw Mode (#16): `raw_mode_enter`, the binary frame (`DeviceCore::kRawFrameStart`
 Escalation (#9) lives in the Device core: per session, from `state_entered` (related to the Device clock through `host_time`) or the latest Acknowledge. Its thresholds are Preferences (`device::Preferences::escalation`). Escalation tests send `heartbeat(clock)`, whose Host time tracks the fake clock, and compare with frames of a fresh Device (`awaitingInputFor(ms)`) or watch a stretch of frames (`watch`: pulses, brightness, colors).
 
 Preferences (#11): `device::Preferences` (constructor defaults) and the `preferences` push, which replaces them whole (a missing field is the default; an invalid one voids the message). `render()` lays the frame out in the rotated shape, then `present()` turns it onto the matrix and scales every channel to `brightnessCap × brightness / 100` (a lit channel stays ≥ 1): the cap holds for every state, Escalation step, Takeover, Disconnected and Raw Mode frame. Quiet Mode darkens all but Awaiting Input; Escalation, Takeover, Disconnected and Raw Mode are unchanged. Caching is the shell's: the core takes a `device::PreferencesCache*`, loads it once in the constructor (boot) and `save()`s the canonical `preferences` line when a push changes them; the terminal Virtual Device persists it with `--preferences-file PATH` (the daemon passes one in the runtime directory). Tests: the `// --- Preferences` sections of `device_core_test.cpp` (`FakeCache`, `brightestUnder`, `cappedProfile`).
+
+Themes (#12): per-state appearance is data, interpreted by the Device core (`theme.h`; format in `protocol/themes.md`). The `theme` Preference names one: the built-in `default` (the Character Theme with Nino, the original mascot, frames in the built-in Sprite Pack `nino`) or `minimal` (abstract), or one installed with an `install` message (`codino theme install FILE`). A pose shows only on the whole matrix; Tiles, and a pose whose Sprite Pack is missing, use the abstract Theme's effect for the state. Escalation dims what the Theme draws for Awaiting Input; Takeover, Quiet Mode, Disconnected, Raw Mode, the cap and rotation are the Theme's frame. Storage is the shell's: the core takes a `device::ThemeStore*` (RAM-only `MemoryThemeStore` by default) and lists, loads, saves and erases one `install` line per Theme or Sprite Pack; the terminal Virtual Device persists them with `--store-dir DIR` (the daemon passes one in the runtime directory). On the Host, `host.Install`/`Uninstall` send one at a time and wait for the Device's `install_reply` without `h.mu`; `codino theme list|install|uninstall` go through the daemon (ops `install`, `uninstall`) and wait for it to claim a Device. Most `device_core_test.cpp` tests render with `minimal` (`abstractTheme()`), whose fills read as Session States; `theme_test.cpp` covers the Character Theme, installing and the effects. Clawd is never shipped (ADR 0003): `protocol/themes.md` tells users how to load a pack they make, and `themes/examples/` (tested to install) is the starting point.
 
 The terminal Virtual Device renders every 100 ms even without input, so Disconnected shows 5 s after the Host goes silent:
 

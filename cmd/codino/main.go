@@ -9,6 +9,9 @@
 //	codino set KEY VALUE
 //	codino unset KEY
 //	codino status [--json]
+//	codino theme list
+//	codino theme install FILE
+//	codino theme uninstall [--sprite-pack] NAME
 //	codino daemon [--virtual-device PATH] [--exit-grace DURATION]
 //	codino hook   (internal: run by the Claude Code plugin's hooks)
 package main
@@ -24,6 +27,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -57,6 +61,9 @@ const usage = `usage:
   codino set KEY VALUE
   codino unset KEY
   codino status [--json]
+  codino theme list
+  codino theme install FILE
+  codino theme uninstall [--sprite-pack] NAME
   codino daemon [--virtual-device PATH] [--exit-grace DURATION]
   codino hook   (internal: Claude Code hooks pipe their JSON to it)
 
@@ -69,7 +76,8 @@ get, set, unset: read and change the Preferences in the config file
 ($CODINO_CONFIG, else $XDG_CONFIG_HOME/codino/config.toml, else
 ~/.config/codino/config.toml). The Host Daemon applies a change within a
 second. get with no KEY lists every Preference. Keys:
-  theme                 default
+  theme                 a Theme's name: default (the mascot), minimal, or one
+                        installed with codino theme install
   brightness            1-100, percent of the Device's brightness cap
   layout                adaptive or aggregate
   rotation              0, 90, 180 or 270 (degrees clockwise)
@@ -81,6 +89,9 @@ second. get with no KEY lists every Preference. Keys:
   escalation.steady     e.g. 10m: Escalation settles into a steady glow
   project_colors.PATH   #rrggbb pinned to the git repo PATH is in (PATH may be .)
 unset returns a Preference to its default.
+theme: lists the Themes and Sprite Packs the Device has, installs a Theme or
+Sprite Pack file on it (kept in its flash; see protocol/themes.md), or removes
+one.
 `
 
 func main() {
@@ -107,6 +118,8 @@ func main() {
 		err = unset(args)
 	case "status":
 		err = status(paths, args, os.Stdout)
+	case "theme":
+		err = theme(paths, args, os.Stdout)
 	case "daemon":
 		err = runDaemon(paths, args)
 	case "-h", "--help", "help":
@@ -257,6 +270,9 @@ func printStatus(out io.Writer, st host.Status, now time.Time) {
 	default:
 		fmt.Fprintln(out, "Device: not connected")
 	}
+	if d := st.Device; d.Claimed && len(d.Themes) > 0 && !slices.Contains(d.Themes, st.Theme) {
+		fmt.Fprintf(out, "Theme: %s is not on the Device, which shows \"default\" (codino theme list)\n", st.Theme)
+	}
 	if st.Showing {
 		fmt.Fprintln(out, "Raw Mode: showing a picture (codino show)")
 	}
@@ -313,10 +329,12 @@ func runDaemon(paths daemon.Paths, args []string) error {
 		if err != nil {
 			return fmt.Errorf("virtual device: %w", err)
 		}
-		// Its Preferences cache lives as long as the runtime directory, as a
-		// Device's lives in flash.
+		// Its Preferences cache and installed Themes live as long as the
+		// runtime directory, as a Device's live in flash.
 		devices = devicelink.VirtualDevice{Path: path, Display: os.Stderr,
-			Args: []string{"--preferences-file", filepath.Join(paths.Dir, "virtual-device-preferences.jsonl")}}
+			Args: []string{"--preferences-file", filepath.Join(paths.Dir, "virtual-device-preferences.jsonl"),
+				// Its installed Themes and Sprite Packs, as a Device's flash.
+				"--store-dir", filepath.Join(paths.Dir, "virtual-device-store")}}
 	}
 	prefsFile, err := preferencesFile()
 	if err != nil {

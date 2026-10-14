@@ -1,8 +1,8 @@
 ---
 name: codino
-description: Show or change the Codino Preferences (brightness, Layout, rotation, Quiet Mode, Done decay, Escalation thresholds, Disconnected timeout, pinned Project Colors) through `codino get/set/unset`. Use when the user asks to change how their Codino LED matrix looks or behaves.
+description: Show or change the Codino Preferences (Theme, brightness, Layout, rotation, Quiet Mode, Done decay, Escalation thresholds, Disconnected timeout, pinned Project Colors) through `codino get/set/unset`. Use when the user asks to change how their Codino LED matrix looks or behaves.
 argument-hint: "[KEY [VALUE]] | unset KEY | what you want changed"
-allowed-tools: Bash(codino get:*), Bash(codino set:*), Bash(codino unset:*)
+allowed-tools: Bash(codino get:*), Bash(codino set:*), Bash(codino unset:*), Bash(codino theme list:*)
 ---
 
 # Codino Preferences
@@ -25,7 +25,7 @@ Keys and values:
 
 | Key | Values |
 |---|---|
-| `theme` | `default` (more Themes come later) |
+| `theme` | a Theme the Device has: `default` (the mascot Character Theme), `minimal` (abstract), or one the user installed; `codino theme list` shows them |
 | `brightness` | 1-100: percent of the Device's brightness cap, which the Device always enforces |
 | `layout` | `adaptive` (one Tile per session) or `aggregate` (the Aggregate State on the whole matrix) |
 | `rotation` | `0`, `90`, `180` or `270` degrees clockwise |
@@ -36,5 +36,7 @@ Keys and values:
 | `escalation.takeover` | a duration such as `2m`: the waiting session takes the whole matrix over |
 | `escalation.steady` | a duration such as `10m`: Escalation settles into a steady glow |
 | `project_colors.PATH` | `#rrggbb` pinned to the git repo PATH is in; `project_colors..` is the current project |
+
+To choose a Theme, run `codino theme list` first and pick one it lists: a Theme the Device doesn't have shows as `default`. Installing a Theme or Sprite Pack file is `codino theme install FILE`; tell the user to run it themselves.
 
 The Escalation steps must stay in order (faster ≤ takeover ≤ steady). If `codino set` refuses a value, show its error and suggest a valid value. After a change, report the new value in one line.

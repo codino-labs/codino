@@ -2,12 +2,12 @@
 
 The wire protocol between the Host Daemon and a Device (or a Virtual Device). It is semantic (ADR-0001): the Host says what state each Agent Session is in, and the Device decides how that looks.
 
-v0 covers the handshake, session upsert, session remove, heartbeat, acknowledge, Disconnected, Raw Mode and the Preferences push. Later kinds from the v1 spec (Theme and Sprite Pack upload, preview-state override) will be added here with their own fixtures.
+v0 covers the handshake, session upsert, session remove, heartbeat, acknowledge, Disconnected, Raw Mode, the Preferences push and installing Themes and Sprite Packs. Later kinds from the v1 spec (preview-state override) will be added here with their own fixtures. The Theme and Sprite Pack format is in [themes.md](themes.md).
 
 ## Framing
 
 - Transport: USB CDC serial on a Device, stdin/stdout on the terminal Virtual Device.
-- Every message is one line terminated by `\n`: one JSON object, UTF-8 (newline-delimited JSON; a trailing `\r` is tolerated), or a Raw Mode frame, the one binary message (below). A frame's first byte is `0xFF`, which is never valid UTF-8, so a receiver tells the two apart by the first byte of the line.
+- Every message is one line terminated by `\n`: one JSON object, UTF-8 (newline-delimited JSON; a trailing `\r` is tolerated), or a Raw Mode frame, the one binary message (below). A Device's line buffer holds 8192 bytes, newline included: it ignores a longer line. An `install` is the longest message. A frame's first byte is `0xFF`, which is never valid UTF-8, so a receiver tells the two apart by the first byte of the line.
 - Every JSON message has a string field `type`.
 - Receivers ignore unknown fields, unknown `type`s and lines that are not valid JSON. Senders always send every field listed for a message. A receiver ignores a message as a whole when a field it needs is missing or invalid; each message below says which fields a v0 Device needs. This keeps an older Device usable by a newer Host for everything the Device already understands.
 - Times are Unix milliseconds on the Host clock. The Device has no wall clock; it relates Host times to its own clock through `host_time` in `hello` and `heartbeat`.
@@ -34,6 +34,8 @@ A `hello` starts a new link: the Device forgets every Agent Session it holds (it
 | `protocol` | integer | Protocol version the Device speaks. |
 | `firmware` | string | Firmware version (semver). |
 | `hardware_profile` | object | The Device's Hardware Profile, below. |
+| `themes` | array of strings | The Themes the Device has: its built-in ones first, then the installed ones (Themes and Sprite Packs, below). |
+| `sprite_packs` | array of strings | The Sprite Packs it has, likewise. |
 
 Hardware Profile fields:
 
@@ -108,7 +110,7 @@ Done decay is the Host's: the Session Tracker returns a session that stayed Done
 
 ## Disconnected
 
-Every message the Device can use (`hello`, `heartbeat`, a valid `session_upsert`, `session_remove`, `acknowledge` or `preferences`, `raw_mode_enter`, `raw_mode_exit`, a Raw Mode frame it shows) tells it the Host is alive; lines it ignores don't. When nothing usable has arrived for the Disconnected timeout, the Device shows Disconnected. It counts from boot too, so a Device that never heard from a Host shows it as well.
+Every message the Device can use (`hello`, `heartbeat`, a valid `session_upsert`, `session_remove`, `acknowledge` or `preferences`, `raw_mode_enter`, `raw_mode_exit`, a Raw Mode frame it shows, an `install` or `uninstall` it answers) tells it the Host is alive; lines it ignores don't. When nothing usable has arrived for the Disconnected timeout, the Device shows Disconnected. It counts from boot too, so a Device that never heard from a Host shows it as well.
 
 - The timeout is a Preference (`disconnected_timeout_ms`, 5 seconds by default), which a Device boots with from its cache, so it applies before any Host connects.
 - Disconnected is not a Session State. It hides the sessions, because the Device no longer knows their state, and it never looks like Idle: v0 draws a dim diagonal line on a dark matrix. It shows in Quiet Mode too.
@@ -173,13 +175,15 @@ Tile slots are the Host's. Tile slot `i` is the `i`th region in the order above;
 
 The Device places each session at its slot when the slot fits the room and no other session holds it. Between those messages (a session removed, the moved sessions not upserted yet) slots can disagree with the room: the sessions that don't fit take the free Tiles in slot order, and those left over go to the Overflow Tile.
 
-## Rendering in v0
+## Rendering
 
-With one session, or in the Aggregate Layout, the Device shows the Aggregate State as one solid color across the whole matrix. The most urgent Session State wins: Awaiting Input > Error > Done > Working > Idle. Awaiting Input escalates as above; the other states are steady. With no sessions the matrix is dark.
+The Device renders by the Theme the `theme` Preference names ([themes.md](themes.md)): `default`, the Character Theme with the mascot, unless the Preferences say otherwise.
 
-With several sessions in the adaptive Layout each Tile is lit in its session's Project Color and animated by its Session State: Idle is a dim steady glow, Working a bright row running down a dimmer Tile, Done steadily lit, Error blinking, Awaiting Input pulsing with its own Escalation step (a gentle pulse, then a faster and brighter one, then a steady glow). Free Tiles are dark. The Overflow Tile is animated the same way by the Aggregate State of its sessions, in that Session State's own color, since it stands for several projects. A Takeover takes the whole matrix in either Layout.
+With one session, or in the Aggregate Layout, the whole matrix shows the Aggregate State as the Theme draws it: a pose of the mascot, or an effect in the Session State's own color. The most urgent Session State wins: Awaiting Input > Error > Done > Working > Idle. Awaiting Input escalates as above, Escalation dimming and brightening what the Theme draws. With no sessions the matrix is dark.
 
-Themes come later (#12): v0 renders every `theme` alike. Escalation's brightness steps are fractions of full brightness, which the brightness cap scales like every other pixel (below). In Quiet Mode the matrix shows only Awaiting Input: the Aggregate State is dark unless it is Awaiting Input, and every Tile but those of sessions Awaiting Input (and an Overflow Tile holding one) is dark. Escalation and Takeover go on as usual.
+With several sessions in the adaptive Layout each Tile is lit in its session's Project Color and animated by its Session State's effect in the Theme; a pose needs the whole matrix, so under a Character Theme Tiles use the effects of the abstract Theme (`minimal`): Idle is a dim steady glow, Working a bright row running down a dimmer Tile, Done steadily lit, Error blinking, Awaiting Input pulsing with its own Escalation step (a gentle pulse, then a faster and brighter one, then a steady glow). Free Tiles are dark. The Overflow Tile is animated the same way by the Aggregate State of its sessions, in that Session State's own color (the first of its palette in the Theme), since it stands for several projects. A Takeover takes the whole matrix in either Layout.
+
+Escalation's brightness steps are fractions of full brightness, which the brightness cap scales like every other pixel (below). In Quiet Mode the matrix shows only Awaiting Input: the Aggregate State is dark unless it is Awaiting Input, and every Tile but those of sessions Awaiting Input (and an Overflow Tile holding one) is dark. Escalation and Takeover go on as usual.
 
 ## Preferences (Host → Device)
 
@@ -191,7 +195,7 @@ Sent after `hello_reply`, before the `session_upsert`s, on every claim, and agai
 
 | Field | Type | Meaning |
 |---|---|---|
-| `theme` | string, 1–32 bytes | The Theme's name. v0 keeps it and renders every Theme alike. |
+| `theme` | string | The name of the Theme to render by: 1–32 of `a-z`, `0-9`, `-`, `_`. A Theme the Device doesn't have shows as `default`; the Device keeps the name, so the Theme shows once it is installed. |
 | `brightness` | integer 1–100 | Percent of the Hardware Profile's `brightness_cap`. |
 | `layout` | string | `adaptive` or `aggregate` (Layout and Tiles, above). |
 | `rotation` | integer | `0`, `90`, `180` or `270`: degrees the picture is turned clockwise on the matrix. |
@@ -204,6 +208,32 @@ A push is the whole set: a field the Device doesn't find takes the Device's defa
 - **Brightness.** Every LED channel the Device shows (Session States, Escalation's steps, Takeover, Disconnected, Raw Mode frames) is scaled to `brightness_cap × brightness / 100` of full; a lit channel stays at least 1, so dim patterns never go dark on a dim Device. Whatever the Preferences say, nothing exceeds the cap.
 - **Rotation.** The Device lays the picture out in the turned shape (a 16×8 matrix turned by 90 shows an 8×16 picture) and turns it onto the LEDs, Raw Mode frames included.
 - **Cached.** The Device keeps the last Preferences it was pushed (in flash; the terminal Virtual Device in its `--preferences-file`) and boots with them, so the Disconnected timeout, brightness and rotation apply before any Host connects. It writes the cache only when a push changes them.
+
+## Themes and Sprite Packs (Host → Device, reply Device → Host)
+
+Themes and Sprite Packs install on the Device without reflashing ([themes.md](themes.md) has their format). The Device keeps them in its flash (the terminal Virtual Device in its `--store-dir`), at most 8 of each besides its built-in ones, and boots with them. The Host doesn't keep them: what a Device has, it says in its `hello_reply` and in every `install_reply`.
+
+### `install`
+
+A Theme or Sprite Pack file, as one line, with `"type":"install"` added: its `kind` (`theme` or `sprite_pack`), its `name`, and the fields of its kind. The Device validates the whole of it; one it refuses changes nothing. Installing under a name the Device has replaces it; a built-in name is refused. Installing the selected Theme, or a Sprite Pack it uses, shows at once.
+
+### `uninstall`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `kind` | string | `theme` or `sprite_pack`. |
+| `name` | string | What to remove. Built-in ones can't be removed. Uninstalling the selected Theme shows `default`; uninstalling a Sprite Pack the selected Theme uses shows its abstract effects instead of those poses. |
+
+### `install_reply`
+
+The Device answers every `install` and `uninstall` with one, which also counts as hearing from the Host. The Host sends one install or uninstall at a time and waits for its reply.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `kind`, `name` | string | As in the message answered. |
+| `ok` | bool | Whether it was done. |
+| `error` | string | Why not, when `ok` is false (e.g. `states.idle: palette must hold 1 to 16 colors`), for the CLI to show. |
+| `themes`, `sprite_packs` | array of strings | What the Device has now, as in `hello_reply`. |
 
 ## Fixtures
 
@@ -221,6 +251,10 @@ A push is the whole set: a field the Device doesn't find takes the Device's defa
 | `raw-mode-enter.jsonl` | Host → Device |
 | `raw-mode-exit.jsonl` | Host → Device |
 | `raw-frame.bin` | Host → Device: a frame for the 8×8 reference build, the LED at (x, y) in R = 32x, G = 32y, B = 128 |
-| `preferences.jsonl` | Host → Device: brightness 50, the Aggregate Layout, turned 180°, Disconnected after 10 s, Escalation at 20 s, 1 min, 5 min |
+| `preferences.jsonl` | Host → Device: the `minimal` Theme, brightness 50, the Aggregate Layout, turned 180°, Disconnected after 10 s, Escalation at 20 s, 1 min, 5 min |
+| `install-sprite-pack.jsonl` | Host → Device: the Sprite Pack `dots`, two 4×4 frames |
+| `install-theme.jsonl` | Host → Device: the Theme `ember`, with every effect but `pulse` and a pose of `dots` for Done |
+| `install-reply.jsonl` | Device → Host: the reply to `install-theme.jsonl` on the reference build that has `dots` |
+| `uninstall.jsonl` | Host → Device: uninstall the Theme `ember` |
 
 A change to the protocol changes the fixtures in the same commit.

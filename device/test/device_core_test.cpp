@@ -40,7 +40,7 @@ device::HardwareProfile profile8x8() {
 
 // Reads the single message of a protocol fixture, without its newline.
 std::string fixture(const std::string& name) {
-  std::ifstream in(std::string(PROTOCOL_FIXTURES_DIR) + "/" + name);
+  std::ifstream in(std::string(PROTOCOL_FIXTURES_DIR) + "/" + name, std::ios::binary);
   REQUIRE_MESSAGE(in.good(), "missing fixture " << name);
   std::string line;
   std::getline(in, line);
@@ -1071,4 +1071,152 @@ TEST_CASE("the Aggregate Layout shows the Aggregate State on the whole matrix") 
   core.receive(upsertTile("b", "error", "#ff3da5", 1));
 
   CHECK(core.render() == loneSessionFrame("error"));
+}
+
+// Raw Mode (#16): the Host streams pixels in binary frames; Awaiting Input
+// always pre-empts them (ADR-0001).
+namespace {
+
+// The pixel protocol/fixtures/raw-frame.bin sets at (x, y).
+device::Rgb rawFixturePixel(int x, int y) {
+  return {static_cast<uint8_t>(x * 32), static_cast<uint8_t>(y * 32), 0x80};
+}
+
+bool showsRawFixture(const device::PixelBuffer& frame) {
+  for (uint8_t y = 0; y < 8; ++y)
+    for (uint8_t x = 0; x < 8; ++x)
+      if (frame.at(x, y) != rawFixturePixel(x, y)) return false;
+  return true;
+}
+
+}  // namespace
+
+TEST_CASE_FIXTURE(Device8x8, "in Raw Mode the matrix shows the pixels of the Host's frame") {
+  core.receive(upsert("s1", "working"));
+
+  CHECK(core.receive(fixture("raw-mode-enter.jsonl")).empty());
+  CHECK(core.receive(fixture("raw-frame.bin")).empty());
+
+  CHECK(showsRawFixture(core.render()));
+}
+
+TEST_CASE_FIXTURE(AggregateDevice8x8, "any Awaiting Input pre-empts Raw Mode at once, and the Host's pixels come back after") {
+  core.receive(upsert("s1", "working"));
+  core.receive(fixture("raw-mode-enter.jsonl"));
+  core.receive(fixture("raw-frame.bin"));
+
+  core.receive(upsert("s2", "awaiting_input"));
+  CHECK(core.render() == awaitingInputFor(0));
+
+  core.receive(upsert("s2", "working"));
+  CHECK(showsRawFixture(core.render()));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "Escalation goes on under Raw Mode: a Takeover after 2 min ignored") {
+  core.receive(fixture("raw-mode-enter.jsonl"));
+  core.receive(upsert("asking", "awaiting_input", "#2ad14f"));
+  core.receive(upsert("busy", "working", "#ff3da5"));
+
+  for (int second = 0; second < 2 * 60; ++second) {
+    core.receive(fixture("raw-frame.bin"));
+    advanceWithHeartbeats(core, clock, kSecond);
+  }
+
+  CHECK(isFilled(core.render(), {0, 0, 8, 8}, kGreen));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "raw_mode_exit returns the matrix to the Device's own rendering") {
+  core.receive(upsert("s1", "working"));
+  core.receive(fixture("raw-mode-enter.jsonl"));
+  core.receive(fixture("raw-frame.bin"));
+
+  CHECK(core.receive(fixture("raw-mode-exit.jsonl")).empty());
+
+  CHECK(core.render() == loneSessionFrame("working"));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "a Host gone silent ends Raw Mode: Disconnected, then the Device's own rendering") {
+  core.receive(upsert("s1", "working"));
+  core.receive(fixture("raw-mode-enter.jsonl"));
+  core.receive(fixture("raw-frame.bin"));
+
+  clock.advance(kTimeout);
+  CHECK(core.render() == disconnectedFrame({"working"}));
+
+  core.receive(heartbeat(clock));
+  CHECK(core.render() == loneSessionFrame("working"));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "Raw Mode frames keep the Device connected") {
+  core.receive(fixture("raw-mode-enter.jsonl"));
+  for (int i = 0; i < 10; ++i) {
+    clock.advance(kSecond);
+    core.receive(fixture("raw-frame.bin"));
+  }
+
+  CHECK(showsRawFixture(core.render()));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "a hello ends Raw Mode: a new Host Daemon starts from the Device's own rendering") {
+  core.receive(fixture("raw-mode-enter.jsonl"));
+  core.receive(fixture("raw-frame.bin"));
+
+  core.receive(fixture("hello.jsonl"));
+  core.receive(upsert("s1", "working"));
+
+  CHECK(core.render() == loneSessionFrame("working"));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "Raw Mode shows a dark matrix until the first frame") {
+  core.receive(upsert("s1", "working"));
+
+  core.receive(fixture("raw-mode-enter.jsonl"));
+
+  CHECK(isDark(core.render()));
+}
+
+TEST_CASE("frames the Device cannot use are ignored, and don't count as hearing from the Host") {
+  const std::string frame = fixture("raw-frame.bin");
+  struct Unusable {
+    const char* why;
+    bool inRawMode;
+    std::string frame;
+  };
+  const Unusable unusable[] = {
+      {"outside Raw Mode", false, frame},
+      {"one pixel short", true, frame.substr(0, frame.size() - 3)},
+      {"one byte too long", true, frame + '\x01'},
+      {"for a 16x16 matrix", true, frame + std::string(16 * 16 * 3 - 8 * 8 * 3, '\x01')},
+  };
+  for (const auto& [why, inRawMode, line] : unusable) {
+    CAPTURE(why);
+    FakeClock clock;
+    device::DeviceCore core(profile8x8(), "0.1.0", clock);
+    core.receive(upsert("s1", "working"));
+    if (inRawMode) core.receive(fixture("raw-mode-enter.jsonl"));
+    clock.advance(kTimeout - 1);
+
+    core.receive(line);
+
+    CHECK_FALSE(showsRawFixture(core.render()));
+    clock.advance(1);
+    CHECK(core.render() == disconnectedFrame({"working"}));
+  }
+}
+
+TEST_CASE("a frame has one pixel per LED of the Hardware Profile's matrix") {
+  FakeClock clock;
+  device::HardwareProfile profile;
+  profile.width = 16;
+  profile.height = 16;
+  device::DeviceCore core(profile, "0.1.0", clock);
+  std::string frame(1, '\xFF');
+  for (int i = 0; i < 16 * 16; ++i) frame += i == 16 * 16 - 1 ? std::string("\x01\x02\x03", 3) : std::string(3, '\x00');
+  core.receive(fixture("raw-mode-enter.jsonl"));
+
+  core.receive(frame);
+
+  const auto& shown = core.render();
+  CHECK(shown.at(15, 15) == device::Rgb{1, 2, 3});
+  CHECK(shown.at(14, 15) == device::Rgb{});
 }

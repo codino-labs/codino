@@ -102,8 +102,14 @@ class DeviceCore {
   DeviceCore(HardwareProfile profile, std::string firmwareVersion, const Clock& clock,
              Escalation escalation = {}, Layout layout = Layout::Adaptive);
 
-  // Feeds one protocol line (without the trailing newline). Returns the reply
-  // line to send back, or an empty string when there is none.
+  // The first byte of a Raw Mode frame: never valid UTF-8, so no JSON line
+  // starts with it. The frame is that byte, then width x height x 3 bytes of
+  // RGB, row-major from the top-left, none of them a newline.
+  static constexpr char kRawFrameStart = '\xFF';
+
+  // Feeds one protocol line (without the trailing newline): a JSON message or
+  // a Raw Mode frame. Returns the reply line to send back, or an empty string
+  // when there is none.
   std::string receive(std::string_view line);
 
   // The human Acknowledges on the Device (button press, IMU double-tap, a key
@@ -162,7 +168,12 @@ class DeviceCore {
   void heardHostTime(int64_t hostTime);
   uint32_t clockTimeOf(int64_t hostTime) const;
 
+  void receiveRawFrame(std::string_view frame);
+
   std::map<std::string, Session> sessions_;
+  // Raw Mode: the Host's pixels, shown while no session is Awaiting Input.
+  bool rawMode_ = false;
+  PixelBuffer raw_;
   // The latest Host time heard (hello, heartbeat) and the clock time it was
   // heard at, to relate Host times to the clock.
   bool hostTimeKnown_ = false;

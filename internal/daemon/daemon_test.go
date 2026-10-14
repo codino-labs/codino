@@ -1,8 +1,11 @@
 package daemon_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"testing"
@@ -247,5 +250,107 @@ func TestListenWithinGivesUpOnALiveDaemon(t *testing.T) {
 
 	if _, err := daemon.ListenWithin(paths, 0); !errors.Is(err, daemon.ErrAlreadyRunning) {
 		t.Errorf("ListenWithin: err = %v, want ErrAlreadyRunning", err)
+	}
+}
+
+// pngPicture is a small encoded image for Client.Show.
+func pngPicture(t *testing.T) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	if err := png.Encode(&b, image.NewRGBA(image.Rect(0, 0, 4, 4))); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
+func showing(t *testing.T, client daemon.Client) bool {
+	t.Helper()
+	st, err := client.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	return st.Showing
+}
+
+func TestAShowLastsAsLongAsItsClientStays(t *testing.T) {
+	paths := daemon.PathsIn(filepath.Join(t.TempDir(), "rt"))
+	serve(t, listen(t, paths))
+	client := daemon.Client{Paths: paths}
+
+	show, err := client.Show(context.Background(), pngPicture(t))
+	if err != nil {
+		t.Fatalf("Show: %v", err)
+	}
+	if !showing(t, client) {
+		t.Fatal("the daemon shows nothing")
+	}
+	show.Stop()
+
+	if showing(t, client) {
+		t.Error("the show outlived its client")
+	}
+}
+
+// ended waits up to 5 s for the daemon to end a show.
+func ended(t *testing.T, show *daemon.Show) {
+	t.Helper()
+	select {
+	case <-show.Ended():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the daemon did not end the show")
+	}
+}
+
+func TestANewerShowEndsTheOlderOnesClient(t *testing.T) {
+	paths := daemon.PathsIn(filepath.Join(t.TempDir(), "rt"))
+	serve(t, listen(t, paths))
+	client := daemon.Client{Paths: paths}
+	first, err := client.Show(context.Background(), pngPicture(t))
+	if err != nil {
+		t.Fatalf("Show: %v", err)
+	}
+	defer first.Stop()
+
+	second, err := client.Show(context.Background(), pngPicture(t))
+	if err != nil {
+		t.Fatalf("Show: %v", err)
+	}
+	defer second.Stop()
+
+	ended(t, first)
+	if !showing(t, client) {
+		t.Error("the newer show ended too")
+	}
+}
+
+func TestADaemonThatStopsEndsTheShow(t *testing.T) {
+	paths := daemon.PathsIn(filepath.Join(t.TempDir(), "rt"))
+	ln := listen(t, paths)
+	defer ln.Unlock()
+	h := host.New(fixedClock{time.UnixMilli(1760432400000)}, noDevices)
+	defer h.Close()
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- daemon.Serve(ctx, ln, h) }()
+	show, err := daemon.Client{Paths: paths}.Show(context.Background(), pngPicture(t))
+	if err != nil {
+		t.Fatalf("Show: %v", err)
+	}
+	defer show.Stop()
+
+	stop()
+
+	ended(t, show)
+	if err := <-done; err != nil {
+		t.Errorf("Serve: %v", err)
+	}
+}
+
+func TestShowRefusesWhatIsNotAPicture(t *testing.T) {
+	paths := daemon.PathsIn(filepath.Join(t.TempDir(), "rt"))
+	serve(t, listen(t, paths))
+
+	if _, err := (daemon.Client{Paths: paths}).Show(context.Background(), []byte("not a picture")); err == nil {
+		t.Error("Show accepted text")
 	}
 }

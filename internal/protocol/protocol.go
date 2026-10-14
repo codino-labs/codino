@@ -1,5 +1,6 @@
 // Package protocol holds the wire messages between the Host and a Device, as
-// specified in protocol/README.md. Every message is one JSON object per line.
+// specified in protocol/README.md. Every message is one line: a JSON object,
+// or a Raw Mode frame (RawFrame).
 package protocol
 
 import (
@@ -71,6 +72,44 @@ type Acknowledge struct {
 	HostTime int64  `json:"host_time"`
 }
 
+// RawModeEnter puts the Device in Raw Mode: it shows the RawFrames that
+// follow instead of its own rendering, except while a session is Awaiting
+// Input.
+type RawModeEnter struct {
+	Type string `json:"type"`
+}
+
+// RawModeExit returns the Device to its own rendering.
+type RawModeExit struct {
+	Type string `json:"type"`
+}
+
+// RawFrameStart is the first byte of a RawFrame: never valid UTF-8, so no
+// JSON line starts with it.
+const RawFrameStart = 0xFF
+
+// RawFrame is the one binary message: the pixels of one frame in Raw Mode,
+// sent as RawFrameStart, then 3 bytes (R, G, B) per LED, row-major from the
+// top-left, then a newline. No pixel byte is a newline: NewRawFrame raises
+// every channel at 10 to 11, so a frame is one line however its pixels read.
+type RawFrame struct {
+	line []byte
+}
+
+// NewRawFrame quantises RGB bytes (3 per LED, row-major from the top-left)
+// for the wire.
+func NewRawFrame(rgb []byte) RawFrame {
+	line := make([]byte, 0, len(rgb)+2)
+	line = append(line, RawFrameStart)
+	for _, c := range rgb {
+		if c == '\n' {
+			c++
+		}
+		line = append(line, c)
+	}
+	return RawFrame{line: append(line, '\n')}
+}
+
 // NewHello and the other constructors fill in the message type, so callers
 // can't send a message with the wrong one.
 func NewHello(hostTime int64) Hello {
@@ -89,8 +128,15 @@ func NewAcknowledge(id string, hostTime int64) Acknowledge {
 
 func NewHeartbeat(hostTime int64) Heartbeat { return Heartbeat{Type: "heartbeat", HostTime: hostTime} }
 
+func NewRawModeEnter() RawModeEnter { return RawModeEnter{Type: "raw_mode_enter"} }
+
+func NewRawModeExit() RawModeExit { return RawModeExit{Type: "raw_mode_exit"} }
+
 // Encode renders a message as one protocol line, newline included.
 func Encode(msg any) ([]byte, error) {
+	if f, ok := msg.(RawFrame); ok {
+		return f.line, nil
+	}
 	line, err := json.Marshal(msg)
 	if err != nil {
 		return nil, fmt.Errorf("encode %T: %w", msg, err)

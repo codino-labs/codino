@@ -4,6 +4,7 @@
 //	codino event --session ID --state STATE [--project PATH]
 //	codino event --session ID --end
 //	codino event --session ID --acknowledge [--state STATE]
+//	codino show IMAGE
 //	codino status [--json]
 //	codino daemon [--virtual-device PATH] [--exit-grace DURATION]
 //	codino hook   (internal: run by the Claude Code plugin's hooks)
@@ -30,6 +31,7 @@ import (
 	"github.com/codino-labs/codino/internal/gitrepo"
 	"github.com/codino-labs/codino/internal/host"
 	"github.com/codino-labs/codino/internal/liveness"
+	"github.com/codino-labs/codino/internal/picture"
 )
 
 // name is the product name, kept here so internal packages don't carry it.
@@ -47,6 +49,7 @@ const usage = `usage:
   codino event --session ID --state STATE [--project PATH]
   codino event --session ID --end
   codino event --session ID --acknowledge [--state STATE]
+  codino show IMAGE
   codino status [--json]
   codino daemon [--virtual-device PATH] [--exit-grace DURATION]
   codino hook   (internal: Claude Code hooks pipe their JSON to it)
@@ -54,6 +57,8 @@ const usage = `usage:
 STATE is one of: idle, working, awaiting_input, done, error.
 --acknowledge: the human has seen the session (a new prompt): it clears Done
 and restarts the Escalation of Awaiting Input.
+show: puts a PNG, JPEG or GIF on the Device in Raw Mode, scaled to its matrix,
+an animated GIF looping, until Ctrl-C; Awaiting Input always shows over it.
 `
 
 func main() {
@@ -70,6 +75,8 @@ func main() {
 		hook(paths, os.Stdin, os.Stderr, started) // never fails the hook
 	case "event":
 		err = event(paths, args)
+	case "show":
+		err = show(paths, args, os.Stdout)
 	case "status":
 		err = status(paths, args, os.Stdout)
 	case "daemon":
@@ -125,12 +132,66 @@ func event(paths daemon.Paths, args []string) error {
 		return errUsage
 	}
 
+	client, err := spawningClient(paths)
+	if err != nil {
+		return err
+	}
+	return client.Deliver(context.Background(), e)
+}
+
+// spawningClient talks to the Host Daemon, spawning one when none runs.
+func spawningClient(paths daemon.Paths) (daemon.Client, error) {
 	self, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("find own binary: %w", err)
+		return daemon.Client{}, fmt.Errorf("find own binary: %w", err)
 	}
-	client := daemon.Client{Paths: paths, Spawn: daemon.SpawnCommand(paths, self, "daemon")}
-	return client.Deliver(context.Background(), e)
+	return daemon.Client{Paths: paths, Spawn: daemon.SpawnCommand(paths, self, "daemon")}, nil
+}
+
+// show puts a picture on the Device in Raw Mode until Ctrl-C (or SIGTERM),
+// then returns the Device to its own rendering. It fails when the Host Daemon
+// ends the show first: a newer `codino show` replaced it, or the daemon
+// exited.
+func show(paths daemon.Paths, args []string, out io.Writer) error {
+	fs := newFlags("show")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprintf(os.Stderr, "%s show: give one image file\n%s", name, usage)
+		return errUsage
+	}
+	file := fs.Arg(0)
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	// Fail on a file that is no picture before spawning a daemon for it.
+	if _, err := picture.Decode(data); err != nil {
+		return fmt.Errorf("%s: %w", file, err)
+	}
+	client, err := spawningClient(paths)
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	s, err := client.Show(ctx, data)
+	if err != nil {
+		return err
+	}
+	defer s.Stop()
+	if s.Status.Device.Claimed {
+		fmt.Fprintf(out, "Showing %s on %s. Ctrl-C to stop.\n", file, s.Status.Device.Name)
+	} else {
+		fmt.Fprintf(out, "Showing %s once a Device is connected. Ctrl-C to stop.\n", file)
+	}
+	select {
+	case <-ctx.Done():
+		return nil
+	case <-s.Ended():
+		return errors.New("the Host Daemon ended the show: another codino show replaced it, or the daemon exited")
+	}
 }
 
 func status(paths daemon.Paths, args []string, out io.Writer) error {
@@ -164,6 +225,9 @@ func printStatus(out io.Writer, st host.Status, now time.Time) {
 		fmt.Fprintf(out, "Device: not connected: %s\n", d.Problem)
 	default:
 		fmt.Fprintln(out, "Device: not connected")
+	}
+	if st.Showing {
+		fmt.Fprintln(out, "Raw Mode: showing a picture (codino show)")
 	}
 	fmt.Fprintf(out, "Aggregate State: %s\n", st.AggregateState)
 	if len(st.Sessions) == 0 {

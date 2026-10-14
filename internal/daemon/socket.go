@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/codino-labs/codino/internal/host"
+	"github.com/codino-labs/codino/internal/picture"
 )
 
 // ErrAlreadyRunning means another Host Daemon owns the socket.
@@ -95,17 +97,24 @@ func Serve(ctx context.Context, ln net.Listener, h *host.Host) error {
 			}
 			return fmt.Errorf("accept: %w", err)
 		}
-		wg.Go(func() { serveConn(conn, h) })
+		wg.Go(func() { serveConn(ctx, conn, h) })
 	}
 }
 
-func serveConn(conn net.Conn, h *host.Host) {
+// maxRequest bounds one request line: a base64 picture and some room.
+const maxRequest = MaxPicture*4/3 + 4096
+
+func serveConn(ctx context.Context, conn net.Conn, h *host.Host) {
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(requestTimeout))
 	var req Request
-	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	line, err := bufio.NewReader(io.LimitReader(conn, maxRequest)).ReadBytes('\n')
 	if err == nil {
 		err = json.Unmarshal(line, &req)
+	}
+	if err == nil && req.Op == OpShow {
+		serveShow(ctx, conn, req, h)
+		return
 	}
 	var resp Response
 	if err != nil {
@@ -113,8 +122,46 @@ func serveConn(conn net.Conn, h *host.Host) {
 	} else {
 		resp = handle(req, h)
 	}
+	reply(conn, resp)
+}
+
+func reply(conn net.Conn, resp Response) {
 	if err := json.NewEncoder(conn).Encode(resp); err != nil {
 		slog.Debug("reply to client", "err", err)
+	}
+}
+
+// serveShow shows the request's picture until the client half-closes the
+// connection (or goes away), a newer show replaces it, or the daemon stops.
+// Closing the connection tells the client the show ended.
+func serveShow(ctx context.Context, conn net.Conn, req Request, h *host.Host) {
+	p, err := picture.Decode(req.Picture)
+	if err != nil {
+		reply(conn, Response{Error: err.Error()})
+		return
+	}
+	showing, err := h.Show(p)
+	if errors.Is(err, host.ErrRetired) {
+		reply(conn, Response{Retiring: true})
+		return
+	}
+	if err != nil {
+		reply(conn, Response{Error: err.Error()})
+		return
+	}
+	defer showing.Stop()
+	st := h.Status()
+	reply(conn, Response{Status: &st})
+	conn.SetDeadline(time.Time{})
+	left := make(chan struct{})
+	go func() {
+		io.Copy(io.Discard, conn) // until the client half-closes or goes away
+		close(left)
+	}()
+	select {
+	case <-left:
+	case <-showing.Ended():
+	case <-ctx.Done():
 	}
 }
 

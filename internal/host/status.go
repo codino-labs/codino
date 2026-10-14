@@ -7,6 +7,8 @@ type Status struct {
 	AggregateState SessionState     `json:"aggregate_state"`
 	Sessions       []SessionSummary `json:"sessions"`
 	Device         DeviceConnection `json:"device"`
+	// Showing is true while a picture is shown in Raw Mode (`codino show`).
+	Showing bool `json:"showing"`
 }
 
 // SessionSummary is one Agent Session as the Session Tracker holds it.
@@ -40,7 +42,7 @@ func (h *Host) Status() Status {
 	h.mu.Lock()
 	defer h.unlock()
 	h.dropGoneDevice()
-	st := Status{AggregateState: h.sessions.aggregateState(), Sessions: []SessionSummary{}}
+	st := Status{AggregateState: h.sessions.aggregateState(), Sessions: []SessionSummary{}, Showing: h.showing != nil}
 	for _, s := range h.sessions.ordered() {
 		st.Sessions = append(st.Sessions, SessionSummary{
 			ID: s.id, State: s.state, StateEntered: s.stateEntered,

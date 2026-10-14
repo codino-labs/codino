@@ -94,9 +94,14 @@ DeviceCore::DeviceCore(HardwareProfile profile, std::string firmwareVersion, con
       escalation_(escalation),
       layout_(layout),
       frame_(profile_.width, profile_.height),
+      raw_(profile_.width, profile_.height),
       lastHostMessage_(clock.millis()) {}
 
 std::string DeviceCore::receive(std::string_view line) {
+  if (!line.empty() && line[0] == kRawFrameStart) {
+    receiveRawFrame(line);
+    return {};
+  }
   JsonDocument message;
   if (deserializeJson(message, line.data(), line.size())) return {};
 
@@ -108,8 +113,9 @@ std::string DeviceCore::receive(std::string_view line) {
   };
   if (type == "hello") {
     // A new link: the Host follows with every session it knows, so sessions
-    // from an earlier Host Daemon must not linger.
+    // from an earlier Host Daemon must not linger, nor its Raw Mode.
     sessions_.clear();
+    rawMode_ = false;
     noteHostTime();
     hostMessage();
     return helloReply();
@@ -145,11 +151,28 @@ std::string DeviceCore::receive(std::string_view line) {
     }
   } else if (type == "heartbeat") {
     noteHostTime();
+  } else if (type == "raw_mode_enter") {
+    rawMode_ = true;
+    raw_.fill(Rgb{});
+  } else if (type == "raw_mode_exit") {
+    rawMode_ = false;
   } else {
     return {};
   }
   hostMessage();
   return {};
+}
+
+// A Raw Mode frame is used only in Raw Mode and only when it has exactly one
+// pixel per LED of this matrix.
+void DeviceCore::receiveRawFrame(std::string_view frame) {
+  const size_t w = profile_.width, h = profile_.height;
+  if (!rawMode_ || frame.size() != 1 + w * h * 3) return;
+  const auto* rgb = reinterpret_cast<const uint8_t*>(frame.data() + 1);
+  for (size_t y = 0; y < h; ++y)
+    for (size_t x = 0; x < w; ++x, rgb += 3)
+      raw_.set(static_cast<uint8_t>(x), static_cast<uint8_t>(y), Rgb{rgb[0], rgb[1], rgb[2]});
+  hostMessage();
 }
 
 std::string DeviceCore::helloReply() const {
@@ -216,7 +239,11 @@ SessionState DeviceCore::aggregateState() const {
 
 // Unsigned subtraction keeps working when millis() wraps (every ~49.7 days).
 bool DeviceCore::disconnected() {
-  if (clock_.millis() - lastHostMessage_ >= kDefaultDisconnectedTimeoutMs) disconnected_ = true;
+  if (clock_.millis() - lastHostMessage_ >= kDefaultDisconnectedTimeoutMs) {
+    // The Host that streamed the pixels is gone: Raw Mode ends with it.
+    disconnected_ = true;
+    rawMode_ = false;
+  }
   return disconnected_;
 }
 
@@ -387,6 +414,14 @@ void DeviceCore::renderTile(Region region, SessionState state, Rgb color, Escala
 const PixelBuffer& DeviceCore::render() {
   if (disconnected()) {
     renderDisconnected();
+    return frame_;
+  }
+  // Awaiting Input always pre-empts Raw Mode (ADR-0001).
+  const bool awaitingInput = std::any_of(sessions_.begin(), sessions_.end(), [](const auto& entry) {
+    return entry.second.state == SessionState::AwaitingInput;
+  });
+  if (rawMode_ && !awaitingInput) {
+    frame_ = raw_;
     return frame_;
   }
   if (sessions_.empty()) {

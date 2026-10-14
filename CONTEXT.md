@@ -125,5 +125,5 @@ What the Device shows when the Host has gone silent. It is not a Session State: 
 _Avoid_: offline, idle
 
 **Raw Mode**:
-A Device mode where the Host streams pixels directly, bypassing the Device's own state rendering.
+A Device mode where the Host streams pixels directly, bypassing the Device's own state rendering. Awaiting Input always pre-empts it.
 _Avoid_: passthrough, direct mode

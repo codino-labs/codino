@@ -56,6 +56,11 @@ type Host struct {
 	liveness    LivenessProbe
 	// lastProbe is when Tick last probed the Agents.
 	lastProbe time.Time
+
+	// showing is the picture shown in Raw Mode, if any; shownFrame is the
+	// index of its frame the Device has, -1 for none.
+	showing    *Showing
+	shownFrame int
 }
 
 // TranscriptProbe reads an Agent's transcript for what no hook reports.
@@ -200,9 +205,10 @@ func (h *Host) Apply(e Event) error {
 }
 
 // updateExitGrace starts the exit grace when the last session is gone and
-// stops it while there are any. Callers hold h.mu.
+// stops it while there are any, or a picture is shown. Callers hold h.mu.
 func (h *Host) updateExitGrace(now time.Time) {
-	switch empty := len(h.sessions.sessions) == 0; {
+	// A picture on show holds the Host Daemon too.
+	switch empty := len(h.sessions.sessions) == 0 && h.showing == nil; {
 	case !empty:
 		h.emptySince = time.Time{}
 	case h.emptySince.IsZero():
@@ -230,6 +236,7 @@ func (h *Host) Tick() {
 			h.send(protocol.NewHeartbeat(now.UnixMilli()))
 			h.lastHeartbeat = now
 		}
+		h.sendShowFrame()
 	}
 	look := h.device == nil && !h.closed &&
 		(h.lastFailedClaim.IsZero() || h.clock.Now().Sub(h.lastFailedClaim) >= ClaimRetryInterval)
@@ -319,6 +326,9 @@ const ClaimRetryInterval = 2 * time.Second
 func (h *Host) claim() {
 	now := h.clock.Now()
 	dev, err := devicelink.Claim(h.devices.Candidates(), now)
+	if err == nil {
+		h.prepareShow(dev)
+	}
 	h.mu.Lock()
 	defer h.unlock()
 	if err != nil {
@@ -344,6 +354,7 @@ func (h *Host) claim() {
 			h.send(acknowledge(s))
 		}
 	}
+	h.enterRawMode()
 	go h.listen(dev)
 }
 
@@ -432,6 +443,10 @@ func (h *Host) Close() {
 	h.mu.Lock()
 	defer h.unlock()
 	h.closed = true
+	if h.showing != nil {
+		h.showing.end()
+		h.showing = nil
+	}
 	if h.device != nil {
 		h.drop()
 	}

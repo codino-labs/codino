@@ -30,10 +30,11 @@ Run a single test with `go test -race ./internal/host -run 'TestReplug'`.
 ### Packages
 
 ```
-cmd/codino/          the one binary: CLI (`event`, `status`), the Host Daemon (`daemon`) and `hook` (internal, run by the plugin)
+cmd/codino/          the one binary: CLI (`event`, `show`, `status`), the Host Daemon (`daemon`) and `hook` (internal, run by the plugin)
 internal/claudecode/ Claude Code Adapter: hook JSON → host.Events; transcript probe (interrupts, last write)
 internal/host/       Host core: Session Tracker, Aggregate State, Done decay, Acknowledge, Device Link driving, heartbeat, exit grace, stuck-session cleanup; clock and probes injected
 internal/gitrepo/    repo root of a project directory (worktrees share the main repo's), read from git's files without running git
+internal/picture/    PNG/JPEG/GIF → Raw Mode frames for a matrix size (fit, box filter, GIF disposal and delays), stdlib only
 internal/liveness/   liveness probe: is the Agent's pid still its process (signal 0; /proc start time on Linux)
 internal/devicelink/ handshake and claim; Discoverer seam (VirtualDevice now, USB serial later)
 internal/daemon/     local Unix socket: server, client (`Client.Deliver` spawns the daemon on demand)
@@ -48,6 +49,8 @@ Done decay and Acknowledge (#9): the Session Tracker returns a session Done for 
 
 Layout and Project Colors (#10): the Host's Project Color Allocator (`project_color.go`) gives a session a pinned color (`host.WithPinnedProjectColors`, until Preferences carry pins in #11), else the color of an active session of the same repo root (a session without a project is a project of its own), else the hue of `host.ProjectColors` its repo root hashes to (FNV-1a), bumped to the next hue no active session holds. A session keeps it for its lifetime. Repo roots come from the injected `host.ProjectRootProbe` (`gitrepo.Roots` in the daemon; tests use `fakeRoots`), resolved outside the Host's lock. Tile slots (`assignTiles`) follow the adaptive Layout's room (1, 2, 4, 8, then 7 plus the Overflow Tile from slot 7): a session keeps a slot that fits; newcomers and sessions that no longer fit take the first free slots by session start time, and the Host upserts every session that moved. `project_color_test.go` and `tile_test.go` assert on the upserts the fake Device receives.
 
+Raw Mode (#16): `codino show IMAGE` sends the file to the Host Daemon (`daemon.Client.Show`, op `show`) on a connection it keeps open until Ctrl-C; the daemon holds `host.Show`'s `*Showing` until that connection closes, a newer show replaces it, or the daemon stops, then `Stop` sends `raw_mode_exit`. The Host scales the picture to the claimed Device's matrix (`picture.Frames`, cached per size, never under `h.mu`), re-enters Raw Mode on every claim, sends the frame due on each Tick (the daemon ticks every 10 ms during a show), and a show holds the exit grace. The binary frame is `protocol.RawFrame` (one line: `0xFF`, RGB, `\n`; no pixel byte is a newline). `show_test.go` asserts on the bytes the fake Device receives, `raw-frame.bin` included.
+
 ### Demo: `codino event` drives the Virtual Device
 
 Real USB discovery isn't built yet, so the Host Daemon drives the terminal Virtual Device: it spawns it as a subprocess and speaks the protocol on its stdin/stdout. The matrix goes to the daemon's stderr. Run the daemon in the foreground in one terminal to watch the matrix:
@@ -57,7 +60,7 @@ make -C device && go build -o codino ./cmd/codino
 ./codino daemon --virtual-device device/build/virtual-device
 ```
 
-and send events from another:
+and send events, or a picture, from another:
 
 ```sh
 ./codino event --session a --state working --project .
@@ -65,6 +68,7 @@ and send events from another:
 ./codino status
 ./codino event --session b --acknowledge   # restarts b's Escalation
 ./codino event --session b --end
+./codino show some.gif                     # Raw Mode until Ctrl-C; Awaiting Input shows over it
 ```
 
 Awaiting Input escalates on the matrix: a gentle pulse, faster and brighter after 30 s, a Takeover in the Project Color after 2 min, a steady glow after 10 min. Press Enter in the daemon's terminal to Acknowledge on the Virtual Device: it reads keys from `/dev/tty` only when its matrix goes to a terminal.
@@ -121,6 +125,12 @@ make -C device test
 Run a single test with `device/build/device_core_test -tc="*Aggregate State*"`.
 
 The Layout (#10) is a `device::Layout` constructor parameter, adaptive by default, until the Preferences push carries it (#11); the terminal Virtual Device takes `--layout aggregate`. One session, or the Aggregate Layout, shows the Aggregate State on the whole matrix; several get Tiles where their `tile` says (halves, quadrants, columns, then the Overflow Tile), each in its Project Color and animated by its Session State; a Takeover takes the whole matrix in either Layout. Layout tests assert on regions (`isFilled(frame, kTopLeft, kGreen)`, `isLitIn`, `column(i)`); multi-session tests about the Aggregate State use the `AggregateDevice8x8` fixture.
+
+Raw Mode (#16): `raw_mode_enter`, the binary frame (`DeviceCore::kRawFrameStart`, then RGB; `receive()` takes it like any line) and `raw_mode_exit`. Any session Awaiting Input pre-empts the frame (normal rendering, Escalation and Takeover included) and the frame shows again after; Disconnected and `hello` end Raw Mode. Demo, a frame pre-empted by Awaiting Input and back:
+
+```sh
+(cat protocol/fixtures/{raw-mode-enter.jsonl,raw-frame.bin}; sleep 1; echo '{"type":"session_upsert","id":"a","state":"awaiting_input"}'; sleep 2; echo '{"type":"session_remove","id":"a"}'; sleep 1) | device/build/virtual-device
+```
 
 Escalation (#9) lives in the Device core: per session, from `state_entered` (related to the Device clock through `host_time`) or the latest Acknowledge. Its thresholds are a `device::Escalation` constructor parameter, with defaults until they become Preferences. Escalation tests send `heartbeat(clock)`, whose Host time tracks the fake clock, and compare with frames of a fresh Device (`awaitingInputFor(ms)`) or watch a stretch of frames (`watch`: pulses, brightness, colors).
 

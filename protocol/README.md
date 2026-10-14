@@ -2,13 +2,13 @@
 
 The wire protocol between the Host Daemon and a Device (or a Virtual Device). It is semantic (ADR-0001): the Host says what state each Agent Session is in, and the Device decides how that looks.
 
-v0 covers the handshake, session upsert, session remove, heartbeat, acknowledge and Disconnected. Later kinds from the v1 spec (Preferences push, Raw Mode, Theme and Sprite Pack upload, preview-state override) will be added here with their own fixtures.
+v0 covers the handshake, session upsert, session remove, heartbeat, acknowledge, Disconnected and Raw Mode. Later kinds from the v1 spec (Preferences push, Theme and Sprite Pack upload, preview-state override) will be added here with their own fixtures.
 
 ## Framing
 
 - Transport: USB CDC serial on a Device, stdin/stdout on the terminal Virtual Device.
-- Every message is one JSON object on one line, UTF-8, terminated by `\n` (newline-delimited JSON). A trailing `\r` is tolerated.
-- Every message has a string field `type`.
+- Every message is one line terminated by `\n`: one JSON object, UTF-8 (newline-delimited JSON; a trailing `\r` is tolerated), or a Raw Mode frame, the one binary message (below). A frame's first byte is `0xFF`, which is never valid UTF-8, so a receiver tells the two apart by the first byte of the line.
+- Every JSON message has a string field `type`.
 - Receivers ignore unknown fields, unknown `type`s and lines that are not valid JSON. Senders always send every field listed for a message. A receiver ignores a message as a whole when a field it needs is missing or invalid; each message below says which fields a v0 Device needs. This keeps an older Device usable by a newer Host for everything the Device already understands.
 - Times are Unix milliseconds on the Host clock. The Device has no wall clock; it relates Host times to its own clock through `host_time` in `hello` and `heartbeat`.
 
@@ -108,12 +108,59 @@ Done decay is the Host's: the Session Tracker returns a session that stayed Done
 
 ## Disconnected
 
-Every message the Device can use (`hello`, `heartbeat`, a valid `session_upsert`, `session_remove` or `acknowledge`) tells it the Host is alive; lines it ignores don't. When nothing usable has arrived for the Disconnected timeout, the Device shows Disconnected. It counts from boot too, so a Device that never heard from a Host shows it as well.
+Every message the Device can use (`hello`, `heartbeat`, a valid `session_upsert`, `session_remove` or `acknowledge`, `raw_mode_enter`, `raw_mode_exit`, a Raw Mode frame it shows) tells it the Host is alive; lines it ignores don't. When nothing usable has arrived for the Disconnected timeout, the Device shows Disconnected. It counts from boot too, so a Device that never heard from a Host shows it as well.
 
 - The timeout is 5 seconds for now. It becomes a Preference, carried by the Preferences push.
 - Disconnected is not a Session State. It hides the sessions, because the Device no longer knows their state, and it never looks like Idle: v0 draws a dim diagonal line on a dark matrix.
 - The next usable message ends it. A heartbeat brings back the sessions the Device holds; a `hello` replaces them.
+- Disconnected ends Raw Mode (above).
 - A Host Daemon that exits stops the heartbeats too, so the Device shows Disconnected until the next Host Daemon says `hello`.
+
+## Raw Mode (Host → Device)
+
+Raw Mode is the escape hatch for custom pixels (`codino show`): the Host streams frames and the Device shows them instead of its own rendering. Awaiting Input always pre-empts it (ADR-0001).
+
+### `raw_mode_enter`
+
+No other field. The Device enters Raw Mode with a dark matrix until the first frame. Entering again while in Raw Mode clears the matrix too.
+
+### `raw_mode_exit`
+
+No other field. The Device returns to its own rendering. Ignored outside Raw Mode.
+
+### Raw Mode frame (binary)
+
+The pixels of one frame, as one line of bytes:
+
+| Bytes | Value |
+|---|---|
+| 1 | `0xFF`: a frame starts here. No JSON line starts with it. |
+| 3 × width × height | One LED after another, row-major from the top-left of the logical matrix (the Device maps it to its wiring, serpentine and color order), each as R, G, B, 0–255. No byte is `0x0A`: the Host sends 11 for a channel at 10, an invisible difference. |
+| 1 | `0x0A` (`\n`). |
+
+The length is not sent: width and height are the Device's, from the `hardware_profile` of its `hello_reply`, and the Host scales every picture to them. A Device uses a frame only in Raw Mode and only when it holds exactly `1 + 3 × width × height` bytes before the newline; it ignores any other frame as a whole, like an unusable JSON message. Transports must pass a frame's bytes unchanged: a trailing `\r` is not stripped from a frame.
+
+Why one line: because no pixel byte is a newline, a frame is framed like any JSON message, and every receiver resynchronises the same way: at the next `\n`. A frame cut short (a Host that died mid-frame) runs into the next line and is ignored for its wrong length, losing that line too (should the two add up to a frame's length exactly, they show as noise until the next frame); the Host's next message, at the latest its next heartbeat a second later, arrives whole.
+
+Size: a 16×16 matrix makes 770-byte lines (8×8: 194), so a Device's line buffer holds `2 + 3 × width × height` bytes, and its Raw Mode keeps one frame (768 bytes for 16×16) apart from the rendered one, to show again after a pre-emption.
+
+### Rules
+
+- **Pre-emption.** While any session is Awaiting Input the Device renders as if not in Raw Mode: the Aggregate State or Tiles, with Escalation and Takeover going on as usual. It stays in Raw Mode meanwhile: once no session is Awaiting Input, the latest frame shows again. The Host keeps streaming either way.
+- **The Host gone.** Disconnected ends Raw Mode, and so does `hello`: the Host that streamed the pixels is gone. After Disconnected the next heartbeat brings back the Device's own rendering, not the old pixels; a Host that still has a picture to show sends `raw_mode_enter` again after the `session_upsert`s of a new handshake.
+- `raw_mode_enter`, `raw_mode_exit` and a frame the Device uses all tell the Device the Host is alive (Disconnected, below).
+- No brightness cap yet: the Device shows frames as sent, until it enforces the Hardware Profile's `brightness_cap` on every frame.
+
+### What the Host sends (`codino show`)
+
+`codino show IMAGE` hands a PNG, JPEG or GIF to the Host Daemon, which keeps the show while the command runs:
+
+1. On start, or on claiming a Device during a show (after the `session_upsert`s and replayed `acknowledge`s): `raw_mode_enter`, then the current frame.
+2. Each picture is fitted into the Device's matrix: its aspect ratio kept, centered on unlit LEDs, each LED the average of the pixels it covers (the nearest one when scaling up), transparency as unlit.
+3. An animated GIF loops forever by its frame delays (its loop count is ignored), its frames composed by their disposal methods; delays under 20 ms play at 100 ms, as browsers do. A frame is sent when the one due changes; a still picture is sent once.
+4. On Ctrl-C (or SIGTERM, or the command's connection to the daemon closing for any reason): `raw_mode_exit`. A newer `codino show` replaces the picture (a new `raw_mode_enter` and frame) and ends the older command.
+
+A show keeps the Host Daemon from retiring, as sessions do.
 
 ## Layout and Tiles
 
@@ -136,7 +183,7 @@ Themes and enforcing the Hardware Profile's `brightness_cap` come later: Escalat
 
 ## Fixtures
 
-`fixtures/` holds one example per message kind, one message per `.jsonl` file. They are the contract between the two sides: Host core tests assert that they produce the Host → Device messages and accept the Device → Host ones, and Device core tests the other way round.
+`fixtures/` holds one example per message kind, one message per `.jsonl` file, and the binary Raw Mode frame in `raw-frame.bin`. They are the contract between the two sides: Host core tests assert that they produce the Host → Device messages and accept the Device → Host ones, and Device core tests the other way round.
 
 | Fixture | Direction |
 |---|---|
@@ -147,5 +194,8 @@ Themes and enforcing the Hardware Profile's `brightness_cap` come later: Escalat
 | `heartbeat.jsonl` | Host → Device |
 | `acknowledge.jsonl` | Host → Device |
 | `device-acknowledge.jsonl` | Device → Host |
+| `raw-mode-enter.jsonl` | Host → Device |
+| `raw-mode-exit.jsonl` | Host → Device |
+| `raw-frame.bin` | Host → Device: a frame for the 8×8 reference build, the LED at (x, y) in R = 32x, G = 32y, B = 128 |
 
 A change to the protocol changes the fixtures in the same commit.

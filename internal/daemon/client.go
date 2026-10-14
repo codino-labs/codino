@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -58,44 +59,113 @@ var ErrNotRunning = errors.New("the Host Daemon is not running")
 // none listens, or the one that answered is exiting.
 var errUnavailable = errors.New("no Host Daemon available")
 
+// Show shows an encoded picture (PNG, JPEG or GIF) on the Device in Raw
+// Mode, spawning the Host Daemon when it isn't running. The show lasts until
+// Stop, or until the daemon ends it (Ended). The reply's Status tells whether
+// a Device is claimed.
+func (c Client) Show(ctx context.Context, picture []byte) (*Show, error) {
+	if len(picture) > MaxPicture {
+		return nil, fmt.Errorf("picture of %d bytes: the most is %d", len(picture), MaxPicture)
+	}
+	conn, resp, err := c.open(ctx, Request{Op: OpShow, Picture: picture}, c.Spawn)
+	if err != nil {
+		return nil, err
+	}
+	conn.SetDeadline(time.Time{})
+	s := &Show{conn: conn, ended: make(chan struct{})}
+	if resp.Status != nil {
+		s.Status = *resp.Status
+	}
+	go func() {
+		io.Copy(io.Discard, conn) // until the daemon closes the connection
+		close(s.ended)
+	}()
+	return s, nil
+}
+
+// Show is a picture the Host Daemon shows for this client.
+type Show struct {
+	// Status is the daemon's status when the show started.
+	Status host.Status
+	conn   net.Conn
+	ended  chan struct{}
+}
+
+// Ended is closed once the daemon ended the show: a newer show replaced it,
+// or the daemon exited.
+func (s *Show) Ended() <-chan struct{} { return s.ended }
+
+// Stop ends the show and waits, up to Timeout, until the daemon has returned
+// the Device to its own rendering.
+func (s *Show) Stop() {
+	defer s.conn.Close()
+	if c, ok := s.conn.(interface{ CloseWrite() error }); ok && c.CloseWrite() == nil {
+		select {
+		case <-s.ended:
+		case <-time.After(Timeout):
+		}
+	}
+}
+
 // call sends req and returns the reply. When no Host Daemon is available and
 // spawn is set, it spawns one (once) and retries until ctx is done.
 func (c Client) call(ctx context.Context, req Request, spawn func() error) (Response, error) {
+	conn, resp, err := c.open(ctx, req, spawn)
+	if err != nil {
+		return Response{}, err
+	}
+	conn.Close()
+	return resp, nil
+}
+
+// open is call that leaves the connection open for the caller to close.
+func (c Client) open(ctx context.Context, req Request, spawn func() error) (net.Conn, Response, error) {
 	ctx, cancel := context.WithTimeout(ctx, Timeout)
 	defer cancel()
 	retry := time.NewTicker(20 * time.Millisecond)
 	defer retry.Stop()
 	spawned := false
 	for {
-		resp, err := c.roundTrip(ctx, req)
+		conn, resp, err := c.roundTrip(ctx, req)
 		if !errors.Is(err, errUnavailable) {
-			return resp, err
+			return conn, resp, err
 		}
 		if spawn == nil {
-			return Response{}, fmt.Errorf("%w: %w", ErrNotRunning, err)
+			return nil, Response{}, fmt.Errorf("%w: %w", ErrNotRunning, err)
 		}
 		if !spawned {
 			if err := spawn(); err != nil {
-				return Response{}, fmt.Errorf("spawn Host Daemon: %w", err)
+				return nil, Response{}, fmt.Errorf("spawn Host Daemon: %w", err)
 			}
 			spawned = true
 		}
 		select {
 		case <-ctx.Done():
-			return Response{}, fmt.Errorf("Host Daemon did not start: %w", err)
+			return nil, Response{}, fmt.Errorf("Host Daemon did not start: %w", err)
 		case <-retry.C:
 		}
 	}
 }
 
-// roundTrip makes one request on a new connection.
-func (c Client) roundTrip(ctx context.Context, req Request) (Response, error) {
+// roundTrip makes one request on a new connection, which it returns open
+// when the request succeeded. The reply is the daemon's last write unless
+// the request keeps the connection open (OpShow), so nothing is lost to the
+// buffered reader.
+func (c Client) roundTrip(ctx context.Context, req Request) (net.Conn, Response, error) {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", c.Paths.Socket)
 	if err != nil {
-		return Response{}, fmt.Errorf("%w: %w", errUnavailable, err)
+		return nil, Response{}, fmt.Errorf("%w: %w", errUnavailable, err)
 	}
-	defer conn.Close()
+	resp, err := exchange(ctx, conn, req)
+	if err != nil {
+		conn.Close()
+		return nil, Response{}, err
+	}
+	return conn, resp, nil
+}
+
+func exchange(ctx context.Context, conn net.Conn, req Request) (Response, error) {
 	if deadline, ok := ctx.Deadline(); ok {
 		conn.SetDeadline(deadline)
 	}

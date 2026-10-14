@@ -12,6 +12,10 @@ import (
 // (claiming a Device, heartbeats).
 const tickInterval = 100 * time.Millisecond
 
+// showTickInterval replaces tickInterval while a picture is shown, so an
+// animation's frames go out on time: picture.MinDelay is the shortest delay.
+const showTickInterval = 10 * time.Millisecond
+
 // Run is the Host Daemon: it ticks h and serves clients on ln until ctx is
 // done or h retires.
 func Run(ctx context.Context, ln net.Listener, h *host.Host) error {
@@ -27,14 +31,16 @@ func Run(ctx context.Context, ln net.Listener, h *host.Host) error {
 	ticking := make(chan struct{})
 	go func() {
 		defer close(ticking)
-		ticker := time.NewTicker(tickInterval)
-		defer ticker.Stop()
 		for {
 			h.Tick()
+			wait := tickInterval
+			if h.ShowsPicture() {
+				wait = showTickInterval
+			}
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
+			case <-time.After(wait):
 			}
 		}
 	}()

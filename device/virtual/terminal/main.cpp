@@ -1,6 +1,7 @@
 // Terminal Virtual Device: the Device core built for the Host.
 //
-// Speaks the protocol on stdin/stdout (one JSON message per line) and draws
+// Speaks the protocol on stdin/stdout (one message per line: JSON, or a Raw
+// Mode frame) and draws
 // the matrix on stderr with ANSI 24-bit colors, so the protocol stream stays
 // clean when a Host drives it through a pipe or pseudo-terminal.
 //
@@ -220,7 +221,13 @@ int main(int argc, char** argv) {
       if (!reply.empty()) {
         std::cout << reply << '\n' << std::flush;
       }
-      cause = in.acknowledge ? "(Acknowledge: Enter pressed)" : in.line;
+      if (in.acknowledge) {
+        cause = "(Acknowledge: Enter pressed)";
+      } else if (!in.line.empty() && in.line[0] == device::DeviceCore::kRawFrameStart) {
+        cause = "(Raw Mode frame)";  // binary pixels, not text to print
+      } else {
+        cause = in.line;
+      }
     }
     const device::PixelBuffer& frame = core.render();
     if (frame != shown) {

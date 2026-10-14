@@ -1,6 +1,9 @@
 package host
 
-import "hash/fnv"
+import (
+	"hash/fnv"
+	"maps"
+)
 
 // ProjectColors is the palette the Project Color Allocator hashes repo roots
 // onto: well-separated hues, so two projects are easy to tell apart on the
@@ -31,18 +34,19 @@ func WithProjectRoots(p ProjectRootProbe) Option {
 	return func(h *Host) { h.roots = p }
 }
 
-// WithPinnedProjectColors pins a Project Color ("#rrggbb") to the sessions of
-// a repo root, whatever the hash says. Preferences carry the pins (#11).
-func WithPinnedProjectColors(pins map[string]string) Option {
-	return func(h *Host) { h.sessions.pin(pins) }
-}
-
-// pin sets the pinned Project Colors, by repo root.
-func (t *tracker) pin(pins map[string]string) {
-	t.pins = map[string]string{}
-	for root, color := range pins {
-		t.pins[root] = color
+// pin sets the pinned Project Colors ("#rrggbb"), by repo root, and returns
+// the sessions that took a pinned color: a session keeps its Project Color
+// for its lifetime, unless the human pins another to its project.
+func (t *tracker) pin(pins map[string]string) []*session {
+	t.pins = maps.Clone(pins)
+	var recolored []*session
+	for _, s := range t.ordered() {
+		if pinned, ok := t.pins[s.root]; ok && s.projectColor != pinned {
+			s.projectColor = pinned
+			recolored = append(recolored, s)
+		}
 	}
+	return recolored
 }
 
 // sameDir is the default ProjectRootProbe: no repo lookup.

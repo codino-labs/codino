@@ -166,7 +166,7 @@ func TestOnlyWorkingSessionsFallBackToIdle(t *testing.T) {
 			dev := newReferenceDevice(t)
 			// Done decay is another way back to Idle, not under test here.
 			h := host.New(clock, devices(dev), host.WithTranscriptProbe(&quietTranscript{modified: clock.Now()}),
-				host.WithDoneDecay(3*host.StaleAfter))
+				doneDecay(3*host.StaleAfter))
 			defer h.Close()
 			h.Tick()
 			apply(t, h, e)

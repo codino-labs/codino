@@ -84,18 +84,139 @@ constexpr Pulse kFasterPulse{700, 120, 255};
 // The steady glow's brightness: Escalation settles, so lunch isn't a strobe.
 constexpr int kSteadyGlow = 170;
 
+struct LayoutName {
+  Layout layout;
+  const char* wireName;
+};
+constexpr LayoutName kLayouts[] = {{Layout::Adaptive, "adaptive"}, {Layout::Aggregate, "aggregate"}};
+
+// The longest Theme name a Device keeps.
+constexpr size_t kMaxThemeName = 32;
+// The shortest Disconnected timeout: the Host sends a heartbeat every second.
+constexpr uint32_t kMinDisconnectedTimeoutMs = 1000;
+
+// Reads the Preferences of a `preferences` message into `out`. Every field is
+// optional: a missing one takes its value from `defaults`. A field with an
+// invalid value makes the whole message unusable (false, `out` untouched).
+bool parsePreferences(JsonVariantConst message, const Preferences& defaults, Preferences& out) {
+  Preferences p = defaults;
+  JsonVariantConst theme = message["theme"];
+  if (!theme.isNull()) {
+    if (!theme.is<const char*>()) return false;
+    std::string_view name = theme.as<const char*>();
+    if (name.empty() || name.size() > kMaxThemeName) return false;
+    p.theme = std::string(name);
+  }
+  JsonVariantConst brightness = message["brightness"];
+  if (!brightness.isNull()) {
+    if (!brightness.is<int>() || brightness.as<int>() < 1 || brightness.as<int>() > 100) return false;
+    p.brightness = static_cast<uint8_t>(brightness.as<int>());
+  }
+  JsonVariantConst layout = message["layout"];
+  if (!layout.isNull()) {
+    const LayoutName* found = nullptr;
+    for (const auto& l : kLayouts)
+      if (layout.is<const char*>() && std::string_view(layout.as<const char*>()) == l.wireName) found = &l;
+    if (found == nullptr) return false;
+    p.layout = found->layout;
+  }
+  JsonVariantConst rotation = message["rotation"];
+  if (!rotation.isNull()) {
+    if (!rotation.is<int>()) return false;
+    const int degrees = rotation.as<int>();
+    if (degrees != 0 && degrees != 90 && degrees != 180 && degrees != 270) return false;
+    p.rotation = static_cast<uint16_t>(degrees);
+  }
+  JsonVariantConst quiet = message["quiet_mode"];
+  if (!quiet.isNull()) {
+    if (!quiet.is<bool>()) return false;
+    p.quietMode = quiet.as<bool>();
+  }
+  // A duration in ms: false when present but not one.
+  auto duration = [&](const char* field, uint32_t& value) {
+    JsonVariantConst v = message[field];
+    if (v.isNull()) return true;
+    if (!v.is<uint32_t>()) return false;
+    value = v.as<uint32_t>();
+    return true;
+  };
+  if (!duration("disconnected_timeout_ms", p.disconnectedTimeoutMs) ||
+      !duration("escalation_faster_ms", p.escalation.fasterFromMs) ||
+      !duration("escalation_takeover_ms", p.escalation.takeoverFromMs) ||
+      !duration("escalation_steady_ms", p.escalation.steadyFromMs))
+    return false;
+  if (p.disconnectedTimeoutMs < kMinDisconnectedTimeoutMs) return false;
+  // The steps come in order; two at the same time skip the first of them.
+  if (p.escalation.fasterFromMs > p.escalation.takeoverFromMs ||
+      p.escalation.takeoverFromMs > p.escalation.steadyFromMs)
+    return false;
+  out = p;
+  return true;
+}
+
+// Width and height of the picture on a matrix turned by `rotation` degrees.
+bool turnsSideways(uint16_t rotation) { return rotation == 90 || rotation == 270; }
+
 }  // namespace
 
 DeviceCore::DeviceCore(HardwareProfile profile, std::string firmwareVersion, const Clock& clock,
-                       Escalation escalation, Layout layout)
+                       Preferences preferences, PreferencesCache* cache)
     : profile_(std::move(profile)),
       firmwareVersion_(std::move(firmwareVersion)),
+      defaults_(preferences),
       clock_(clock),
-      escalation_(escalation),
-      layout_(layout),
+      cache_(cache),
+      preferences_(preferences),
       frame_(profile_.width, profile_.height),
+      shown_(profile_.width, profile_.height),
       raw_(profile_.width, profile_.height),
-      lastHostMessage_(clock.millis()) {}
+      lastHostMessage_(clock.millis()) {
+  Preferences cached;
+  JsonDocument message;
+  if (cache_ != nullptr) {
+    const std::string line = cache_->load();
+    if (!deserializeJson(message, line) && parsePreferences(message.as<JsonVariantConst>(), defaults_, cached)) {
+      preferences_ = cached;
+    }
+  }
+  // Defaults that would be refused on the wire are kept as given.
+  if (turnsSideways(preferences_.rotation)) {
+    frame_ = PixelBuffer(profile_.height, profile_.width);
+    raw_ = PixelBuffer(profile_.height, profile_.width);
+  }
+}
+
+std::string DeviceCore::preferencesLine() const {
+  JsonDocument message;
+  message["type"] = "preferences";
+  message["theme"] = preferences_.theme;
+  message["brightness"] = preferences_.brightness;
+  for (const auto& l : kLayouts)
+    if (l.layout == preferences_.layout) message["layout"] = l.wireName;
+  message["rotation"] = preferences_.rotation;
+  message["quiet_mode"] = preferences_.quietMode;
+  message["disconnected_timeout_ms"] = preferences_.disconnectedTimeoutMs;
+  message["escalation_faster_ms"] = preferences_.escalation.fasterFromMs;
+  message["escalation_takeover_ms"] = preferences_.escalation.takeoverFromMs;
+  message["escalation_steady_ms"] = preferences_.escalation.steadyFromMs;
+  std::string line;
+  serializeJson(message, line);
+  return line;
+}
+
+void DeviceCore::applyPreferences(const Preferences& preferences) {
+  const std::string before = preferencesLine();
+  const bool wasSideways = turnsSideways(preferences_.rotation);
+  preferences_ = preferences;
+  if (turnsSideways(preferences_.rotation) != wasSideways) {
+    // The picture's width and height swap: Raw Mode's pixels no longer fit.
+    frame_ = PixelBuffer(frame_.height(), frame_.width());
+    raw_ = PixelBuffer(raw_.height(), raw_.width());
+  }
+  const std::string after = preferencesLine();
+  // Only a change is saved: flash wears with every write.
+  if (cache_ != nullptr && after != before) cache_->save(after);
+}
 
 std::string DeviceCore::receive(std::string_view line) {
   if (!line.empty() && line[0] == kRawFrameStart) {
@@ -156,6 +277,10 @@ std::string DeviceCore::receive(std::string_view line) {
     raw_.fill(Rgb{});
   } else if (type == "raw_mode_exit") {
     rawMode_ = false;
+  } else if (type == "preferences") {
+    Preferences received;
+    if (!parsePreferences(message.as<JsonVariantConst>(), defaults_, received)) return {};
+    applyPreferences(received);
   } else {
     return {};
   }
@@ -166,7 +291,7 @@ std::string DeviceCore::receive(std::string_view line) {
 // A Raw Mode frame is used only in Raw Mode and only when it has exactly one
 // pixel per LED of this matrix.
 void DeviceCore::receiveRawFrame(std::string_view frame) {
-  const size_t w = profile_.width, h = profile_.height;
+  const size_t w = raw_.width(), h = raw_.height();
   if (!rawMode_ || frame.size() != 1 + w * h * 3) return;
   const auto* rgb = reinterpret_cast<const uint8_t*>(frame.data() + 1);
   for (size_t y = 0; y < h; ++y)
@@ -239,7 +364,7 @@ SessionState DeviceCore::aggregateState() const {
 
 // Unsigned subtraction keeps working when millis() wraps (every ~49.7 days).
 bool DeviceCore::disconnected() {
-  if (clock_.millis() - lastHostMessage_ >= kDefaultDisconnectedTimeoutMs) {
+  if (clock_.millis() - lastHostMessage_ >= preferences_.disconnectedTimeoutMs) {
     // The Host that streamed the pixels is gone: Raw Mode ends with it.
     disconnected_ = true;
     rawMode_ = false;
@@ -257,7 +382,7 @@ void DeviceCore::hostMessage() {
 void DeviceCore::renderDisconnected() {
   constexpr Rgb kDisconnected{20, 0, 28};
   frame_.fill(Rgb{});
-  const int w = profile_.width, h = profile_.height;
+  const int w = frame_.width(), h = frame_.height();
   for (int y = 0; y < h; ++y) {
     const int x = (w - 1) - (y * w) / h;
     frame_.set(static_cast<uint8_t>(x), static_cast<uint8_t>(y), kDisconnected);
@@ -268,13 +393,13 @@ void DeviceCore::renderDisconnected() {
 DeviceCore::EscalationStep DeviceCore::escalationStep(Session& session) {
   if (session.state != SessionState::AwaitingInput) return {};
   const uint32_t unacknowledged = clock_.millis() - session.escalationStart;
-  if (session.settled || unacknowledged >= escalation_.steadyFromMs) {
+  if (session.settled || unacknowledged >= preferences_.escalation.steadyFromMs) {
     session.settled = true;
     return {EscalationStep::Steady, 0};
   }
-  if (unacknowledged >= escalation_.takeoverFromMs) return {EscalationStep::Takeover, 0};
-  if (unacknowledged >= escalation_.fasterFromMs)
-    return {EscalationStep::Faster, unacknowledged - escalation_.fasterFromMs};
+  if (unacknowledged >= preferences_.escalation.takeoverFromMs) return {EscalationStep::Takeover, 0};
+  if (unacknowledged >= preferences_.escalation.fasterFromMs)
+    return {EscalationStep::Faster, unacknowledged - preferences_.escalation.fasterFromMs};
   return {EscalationStep::Gentle, unacknowledged};
 }
 
@@ -318,7 +443,9 @@ int DeviceCore::awaitingInputLevel(EscalationStep step) {
 void DeviceCore::renderAggregate(EscalationStep mostInsistent) {
   const SessionState aggregate = aggregateState();
   const Rgb color = infoFor(aggregate).color;
-  if (aggregate == SessionState::AwaitingInput) {
+  if (preferences_.quietMode && aggregate != SessionState::AwaitingInput) {
+    frame_.fill(Rgb{});  // Quiet Mode shows nothing but Awaiting Input
+  } else if (aggregate == SessionState::AwaitingInput) {
     frame_.fill(scaled(color, awaitingInputLevel(mostInsistent)));
   } else {
     frame_.fill(color);
@@ -356,7 +483,7 @@ void DeviceCore::renderTiles() {
   // Halves side by side, quadrants, then columns.
   const int columns = room == 1 ? 1 : room <= 4 ? 2 : 8;
   const int rows = room == 4 ? 2 : 1;
-  const int w = profile_.width, h = profile_.height;
+  const int w = frame_.width(), h = frame_.height();
   auto region = [&](int i) {
     const int col = i % columns, row = i / columns;
     return Region{col * w / columns, row * h / rows, (col + 1) * w / columns, (row + 1) * h / rows};
@@ -381,6 +508,8 @@ void DeviceCore::renderTiles() {
 
 // A Tile in `color`, animated by `state`.
 void DeviceCore::renderTile(Region region, SessionState state, Rgb color, EscalationStep step) {
+  // Quiet Mode leaves dark every Tile but those Awaiting Input.
+  if (preferences_.quietMode && state != SessionState::AwaitingInput) return;
   const uint32_t now = clock_.millis();
   const int height = std::max(region.y1 - region.y0, 1);
   const int workingRow = region.y0 + static_cast<int>((now / kTileWorkingRowMs) % height);
@@ -411,10 +540,10 @@ void DeviceCore::renderTile(Region region, SessionState state, Rgb color, Escala
 // cycling between the Project Colors of every session in Takeover. Otherwise
 // one session, or the Aggregate Layout, shows the Aggregate State on the
 // whole matrix, and several sessions get Tiles.
-const PixelBuffer& DeviceCore::render() {
+void DeviceCore::renderFrame() {
   if (disconnected()) {
     renderDisconnected();
-    return frame_;
+    return;
   }
   // Awaiting Input always pre-empts Raw Mode (ADR-0001).
   const bool awaitingInput = std::any_of(sessions_.begin(), sessions_.end(), [](const auto& entry) {
@@ -422,11 +551,11 @@ const PixelBuffer& DeviceCore::render() {
   });
   if (rawMode_ && !awaitingInput) {
     frame_ = raw_;
-    return frame_;
+    return;
   }
   if (sessions_.empty()) {
     frame_.fill(Rgb{});
-    return frame_;
+    return;
   }
   std::vector<Rgb> takeover;  // the Project Colors in Takeover, in session id order
   EscalationStep mostInsistent;
@@ -436,14 +565,46 @@ const PixelBuffer& DeviceCore::render() {
     if (step.kind > mostInsistent.kind) mostInsistent = step;
   }
   if (!takeover.empty()) {
-    const uint32_t cycle = std::max<uint32_t>(escalation_.takeoverCycleMs, 1);
+    const uint32_t cycle = std::max<uint32_t>(preferences_.escalation.takeoverCycleMs, 1);
     frame_.fill(takeover[(clock_.millis() / cycle) % takeover.size()]);
-  } else if (layout_ == Layout::Aggregate || sessions_.size() == 1) {
+  } else if (preferences_.layout == Layout::Aggregate || sessions_.size() == 1) {
     renderAggregate(mostInsistent);
   } else {
     renderTiles();
   }
-  return frame_;
+}
+
+const PixelBuffer& DeviceCore::render() {
+  renderFrame();
+  return present();
+}
+
+// The rotation turns the picture clockwise on the matrix, and every LED stays
+// under the Hardware Profile's brightness cap, scaled by the brightness
+// Preference. A lit channel never rounds down to off, so dim patterns
+// (Disconnected, an Idle Tile) stay visible on a dim Device.
+const PixelBuffer& DeviceCore::present() {
+  // At least 1 under any cap above 0, so the lowest brightness isn't off.
+  const int level = profile_.brightnessCap == 0 ? 0 : std::max(1, profile_.brightnessCap * preferences_.brightness / 100);
+  auto channel = [level](uint8_t c) {
+    const int v = c * level / 255;
+    return static_cast<uint8_t>(v == 0 && c > 0 && level > 0 ? 1 : v);
+  };
+  const int w = shown_.width(), h = shown_.height();
+  for (int y = 0; y < frame_.height(); ++y) {
+    for (int x = 0; x < frame_.width(); ++x) {
+      int px = x, py = y;
+      switch (preferences_.rotation) {
+        case 90: px = w - 1 - y; py = x; break;
+        case 180: px = w - 1 - x; py = h - 1 - y; break;
+        case 270: px = y; py = h - 1 - x; break;
+        default: break;
+      }
+      const Rgb c = frame_.at(static_cast<uint8_t>(x), static_cast<uint8_t>(y));
+      shown_.set(static_cast<uint8_t>(px), static_cast<uint8_t>(py), Rgb{channel(c.r), channel(c.g), channel(c.b)});
+    }
+  }
+  return shown_;
 }
 
 }  // namespace device

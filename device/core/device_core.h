@@ -65,8 +65,8 @@ class PixelBuffer {
   std::vector<Rgb> pixels_;
 };
 
-// How Awaiting Input escalates the longer it goes unacknowledged. Defaults in
-// code for now; they become Preferences (#11).
+// How Awaiting Input escalates the longer it goes unacknowledged. The
+// thresholds are Preferences.
 struct Escalation {
   // When each step starts, counted from when the session entered Awaiting
   // Input or was last Acknowledged: a gentle pulse first, then faster and
@@ -79,7 +79,7 @@ struct Escalation {
   uint32_t takeoverCycleMs = 1000;
 };
 
-// How the matrix area is used. Adaptive by default; a Preference (#11).
+// How the matrix area is used. Adaptive by default; a Preference.
 enum class Layout {
   // One Tile per Agent Session, in its Project Color and animated by its
   // Session State: one session has the whole matrix (showing the Aggregate
@@ -92,15 +92,56 @@ enum class Layout {
   Aggregate,
 };
 
+// How long the Host may stay silent before the Device shows Disconnected,
+// unless the Preferences say otherwise.
+constexpr uint32_t kDefaultDisconnectedTimeoutMs = 5000;
+
+// The user's choices the Device renders by, pushed by the Host (the
+// `preferences` message) and cached on the Device. The Host keeps the others
+// (Done decay, pinned Project Colors).
+struct Preferences {
+  // The Theme's name. Kept and cached; v0 renders every Theme alike until
+  // Themes land (#12).
+  std::string theme = "default";
+  // Percent (1-100) of the Hardware Profile's brightness cap: 100 is the cap.
+  uint8_t brightness = 100;
+  Layout layout = Layout::Adaptive;
+  // Degrees (0, 90, 180, 270) the picture is turned clockwise on the matrix,
+  // for a Device mounted another way round.
+  uint16_t rotation = 0;
+  // Shows nothing but Awaiting Input, Escalation and Takeover included.
+  bool quietMode = false;
+  // How long the Host may stay silent before the Device shows Disconnected.
+  uint32_t disconnectedTimeoutMs = kDefaultDisconnectedTimeoutMs;
+  Escalation escalation;
+};
+
+// Where the firmware shell keeps the Preferences across reboots (flash on a
+// Device, a file or nothing on a Virtual Device). The Device core does no I/O:
+// it loads them once when constructed and saves them whenever a push changes
+// them, as one `preferences` protocol line.
+class PreferencesCache {
+ public:
+  virtual ~PreferencesCache() = default;
+  // The line saved last; empty when there is none.
+  virtual std::string load() = 0;
+  virtual void save(std::string_view line) = 0;
+};
+
 class DeviceCore {
  public:
   static constexpr int kProtocolVersion = 0;
-  // How long the Host may stay silent before the Device shows Disconnected.
-  // Becomes a Preference later.
-  static constexpr uint32_t kDefaultDisconnectedTimeoutMs = 5000;
+  static constexpr uint32_t kDefaultDisconnectedTimeoutMs = device::kDefaultDisconnectedTimeoutMs;
 
+  // `preferences` are the defaults; Preferences in `cache` (if any) win, so a
+  // Device boots with the user's choices before a Host connects.
   DeviceCore(HardwareProfile profile, std::string firmwareVersion, const Clock& clock,
-             Escalation escalation = {}, Layout layout = Layout::Adaptive);
+             Preferences preferences = {}, PreferencesCache* cache = nullptr);
+
+  // The Preferences the Device renders by.
+  const Preferences& preferences() const { return preferences_; }
+  // The Preferences as a `preferences` protocol line, as the cache keeps them.
+  std::string preferencesLine() const;
 
   // The first byte of a Raw Mode frame: never valid UTF-8, so no JSON line
   // starts with it. The frame is that byte, then width x height x 3 bytes of
@@ -127,14 +168,28 @@ class DeviceCore {
 
   HardwareProfile profile_;
   std::string firmwareVersion_;
+  // The firmware's Preferences: what a field missing from a push means.
+  Preferences defaults_;
   bool disconnected();
   void hostMessage();
   void renderDisconnected();
+  // Renders the picture into frame_ for the current clock time.
+  void renderFrame();
+
+  // Renders by `preferences` from now on, and caches them when they changed.
+  void applyPreferences(const Preferences& preferences);
+  // Turns the logical frame by the rotation and scales it under the
+  // brightness cap into what the LEDs show.
+  const PixelBuffer& present();
 
   const Clock& clock_;
-  Escalation escalation_;
-  Layout layout_;
+  PreferencesCache* cache_;
+  Preferences preferences_;
+  // The frame being rendered, in the orientation the picture is seen in
+  // (width and height swapped when turned by 90 or 270 degrees), and the
+  // frame the LEDs show.
   PixelBuffer frame_;
+  PixelBuffer shown_;
   struct Session {
     SessionState state = SessionState::Idle;
     Rgb projectColor;

@@ -8,7 +8,13 @@ import (
 
 	"github.com/codino-labs/codino/internal/devicelink"
 	"github.com/codino-labs/codino/internal/host"
+	"github.com/codino-labs/codino/internal/preferences"
 )
+
+// doneDecay is a Host whose config file sets the Done decay time.
+func doneDecay(d time.Duration) host.Option {
+	return withPreferences(func(p *preferences.Preferences) { p.DoneDecay = d })
+}
 
 // Done decay and Acknowledge (#9). Escalation itself is rendered by the
 // Device; the Host keeps when each session was last Acknowledged and tells
@@ -21,10 +27,10 @@ func TestDoneDecaysToIdleAfterTheDoneDecayTime(t *testing.T) {
 		elapsed time.Duration
 		want    []string
 	}{
-		{"default, not yet", nil, host.DefaultDoneDecay - time.Millisecond, []string{"done"}},
-		{"default, decayed", nil, host.DefaultDoneDecay, []string{"done", "idle"}},
-		{"configured, not yet", []host.Option{host.WithDoneDecay(time.Minute)}, time.Minute - time.Millisecond, []string{"done"}},
-		{"configured, decayed", []host.Option{host.WithDoneDecay(time.Minute)}, time.Minute, []string{"done", "idle"}},
+		{"default, not yet", nil, preferences.Defaults().DoneDecay - time.Millisecond, []string{"done"}},
+		{"default, decayed", nil, preferences.Defaults().DoneDecay, []string{"done", "idle"}},
+		{"configured, not yet", []host.Option{doneDecay(time.Minute)}, time.Minute - time.Millisecond, []string{"done"}},
+		{"configured, decayed", []host.Option{doneDecay(time.Minute)}, time.Minute, []string{"done", "idle"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -50,7 +56,7 @@ func TestDoneDecaysToIdleAfterTheDoneDecayTime(t *testing.T) {
 func TestDoneDecayEntersIdleWhenTheDecayWasDue(t *testing.T) {
 	clock := clockAt(1760432400000)
 	dev := newReferenceDevice(t)
-	h := host.New(clock, devices(dev), host.WithDoneDecay(time.Minute))
+	h := host.New(clock, devices(dev), doneDecay(time.Minute))
 	defer h.Close()
 	h.Tick()
 	apply(t, h, host.Event{SessionID: "a", State: host.Working}, host.Event{SessionID: "b", State: host.Done})
@@ -161,6 +167,7 @@ func TestADeviceClaimedAgainLearnsWhenEachWaitingSessionWasAcknowledged(t *testi
 
 	assertMessages(t, plugged.Received(), []string{
 		`{"type":"hello","protocol":0,"host_time":1760432461000}`,
+		defaultPreferences,
 		`{"type":"session_upsert","id":"a","state":"awaiting_input","project_color":"#a040ff","state_entered":1760432400000,"tile":0}`,
 		`{"type":"acknowledge","id":"a","host_time":1760432460000}`,
 		`{"type":"session_upsert","id":"b","state":"awaiting_input","project_color":"#30e040","state_entered":1760432400000,"tile":1}`,
@@ -219,7 +226,7 @@ func TestAnAcknowledgeOnTheDeviceClearsEveryDoneSessionAndRestartsEveryEscalatio
 	plugged = newReferenceDevice(t)
 	clock.Advance(time.Second)
 	h.Tick()
-	assertMessages(t, since(plugged, 3), []string{
+	assertMessages(t, since(plugged, 4), []string{
 		`{"type":"acknowledge","id":"b","host_time":1760432460000}`,
 		`{"type":"session_upsert","id":"c","state":"idle","project_color":"#ff3030","state_entered":1760432460000,"tile":2}`,
 		`{"type":"session_upsert","id":"d","state":"working","project_color":"#3a86ff","state_entered":1760432400000,"tile":3}`,

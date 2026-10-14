@@ -13,6 +13,7 @@ import (
 	"github.com/codino-labs/codino/internal/devicelink"
 	"github.com/codino-labs/codino/internal/host"
 	"github.com/codino-labs/codino/internal/picture"
+	"github.com/codino-labs/codino/internal/preferences"
 )
 
 // decode decodes an encoded image or GIF for host.Show.
@@ -75,7 +76,7 @@ func TestShowPutsThePictureOnTheClaimedDeviceInRawMode(t *testing.T) {
 
 	show(t, h, decode(t, encodePNG(t, rawFixtureImage())))
 
-	assertLines(t, since(dev, 1), []string{
+	assertLines(t, since(dev, 2), []string{
 		fixture(t, "raw-mode-enter.jsonl"),
 		fixture(t, "raw-frame.bin"),
 	})
@@ -116,12 +117,13 @@ func TestADeviceClaimedDuringTheShowGetsItAfterTheSessions(t *testing.T) {
 	plugged = true
 	h.Tick()
 
-	assertLines(t, dev.Received()[2:], []string{
+	assertLines(t, dev.Received()[3:], []string{
 		fixture(t, "raw-mode-enter.jsonl"),
 		fixture(t, "raw-frame.bin"),
 	})
-	assertMessages(t, dev.Received()[:2], []string{
+	assertMessages(t, dev.Received()[:3], []string{
 		fixture(t, "hello.jsonl"),
+		defaultPreferences,
 		fixture(t, "session-upsert.jsonl"),
 	})
 }
@@ -222,7 +224,7 @@ func TestAGIFFrameDrawsOverWhatThePreviousFrameLeft(t *testing.T) {
 				h.Tick()
 			}
 
-			assertLines(t, since(dev, 2), tc.want)
+			assertLines(t, since(dev, 3), tc.want)
 		})
 	}
 }
@@ -243,7 +245,7 @@ func TestThePictureIsScaledToTheClaimedDevicesMatrix(t *testing.T) {
 
 	show(t, h, decode(t, encodePNG(t, rawFixtureImage())))
 
-	frame := since(dev, 2)[0]
+	frame := since(dev, 3)[0]
 	if len(frame) != 1+16*16*3 {
 		t.Fatalf("frame of %d bytes, want %d", len(frame), 1+16*16*3)
 	}
@@ -269,7 +271,7 @@ func TestALargerPictureIsAveragedAndFitsTheMatrixKeepingItsAspectRatio(t *testin
 
 	show(t, h, decode(t, encodePNG(t, img)))
 
-	frame := since(dev, 2)[0]
+	frame := since(dev, 3)[0]
 	purple, unlit := color.RGBA{0x7f, 0, 0x7f, 0xff}, color.RGBA{0, 0, 0, 0xff}
 	for y := range 8 {
 		want := purple
@@ -300,12 +302,12 @@ func TestANewerShowReplacesTheOneOnTheDevice(t *testing.T) {
 	default:
 		t.Error("the replaced show has not ended")
 	}
-	assertLines(t, since(dev, 3), []string{
+	assertLines(t, since(dev, 4), []string{
 		fixture(t, "raw-mode-enter.jsonl"),
 		solidFrame(green),
 	})
 	second.Stop()
-	assertLines(t, since(dev, 5), []string{fixture(t, "raw-mode-exit.jsonl")})
+	assertLines(t, since(dev, 6), []string{fixture(t, "raw-mode-exit.jsonl")})
 }
 
 func TestAShowKeepsTheHostDaemonUpAndTheExitGraceStartsWhenItStops(t *testing.T) {
@@ -343,7 +345,7 @@ func TestNoPixelByteIsANewlineSoAFrameIsOneLine(t *testing.T) {
 
 	show(t, h, decode(t, encodePNG(t, img)))
 
-	assertLines(t, since(dev, 2), []string{solidFrame(color.RGBA{11, 11, 11, 0xff})})
+	assertLines(t, since(dev, 3), []string{solidFrame(color.RGBA{11, 11, 11, 0xff})})
 }
 
 func TestShowRejectsWhatIsNotAnImage(t *testing.T) {
@@ -365,7 +367,7 @@ func TestTheShowComesBackAfterTheHostWentSilentForTheDisconnectedTimeout(t *test
 
 	// A laptop asleep: no Tick, so the Device showed Disconnected and left
 	// Raw Mode.
-	clock.Advance(host.DisconnectedTimeout)
+	clock.Advance(preferences.Defaults().DisconnectedTimeout)
 	h.Tick()
 
 	assertLines(t, since(dev, n+1), []string{

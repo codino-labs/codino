@@ -16,6 +16,9 @@ import (
 type VirtualDevice struct {
 	Path    string
 	Display io.Writer
+	// Args are the Virtual Device's command-line arguments, e.g. a
+	// --preferences-file to cache Preferences in, as a Device does in flash.
+	Args []string
 }
 
 func (v VirtualDevice) Candidates() []Candidate {
@@ -23,7 +26,7 @@ func (v VirtualDevice) Candidates() []Candidate {
 }
 
 func (v VirtualDevice) open() (io.ReadWriteCloser, error) {
-	cmd := exec.Command(v.Path)
+	cmd := exec.Command(v.Path, v.Args...)
 	cmd.Stderr = v.Display
 	// os.Pipes rather than cmd.StdinPipe/StdoutPipe: Wait must not close the
 	// ends the Device Link uses, and os.File supports write deadlines. The

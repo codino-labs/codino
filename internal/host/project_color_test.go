@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/codino-labs/codino/internal/host"
+	"github.com/codino-labs/codino/internal/preferences"
 )
 
 // Project Color (#10): a pinned color, else a stable hash of the project's
@@ -56,6 +57,11 @@ func upserts(t *testing.T, lines []string) []upserted {
 
 // colorsOf returns the latest Project Color the Device was sent for each
 // session.
+// pinned is a Host whose config file pins these Project Colors.
+func pinned(pins map[string]string) host.Option {
+	return withPreferences(func(p *preferences.Preferences) { p.ProjectColors = pins })
+}
+
 func colorsOf(t *testing.T, dev *fakeDevice) map[string]string {
 	t.Helper()
 	colors := map[string]string{}
@@ -176,7 +182,7 @@ func TestACollisionSkipsEveryHueAnActiveSessionHolds(t *testing.T) {
 	hashed := colorAlone(t, second)
 	next := palette[(slices.Index(palette, hashed)+1)%len(palette)]
 	// A project pinned to the next hue holds it too.
-	h, dev := projectColorHost(t, host.WithPinnedProjectColors(map[string]string{"/src/pinned": next}))
+	h, dev := projectColorHost(t, pinned(map[string]string{"/src/pinned": next}))
 
 	apply(t, h,
 		host.Event{SessionID: "first", State: host.Working, Project: first},
@@ -194,7 +200,7 @@ func TestAPinnedProjectColorWinsOverTheHash(t *testing.T) {
 	roots := fakeRoots{"/src/app-feature-x": "/src/app"}
 	h, dev := projectColorHost(t,
 		host.WithProjectRoots(roots),
-		host.WithPinnedProjectColors(map[string]string{"/src/app": "#123456"}))
+		pinned(map[string]string{"/src/app": "#123456"}))
 
 	apply(t, h, host.Event{SessionID: "worktree", State: host.Working, Project: "/src/app-feature-x"})
 

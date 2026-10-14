@@ -186,7 +186,7 @@ func TestHostGreetsTheDeviceWithTheHelloFixture(t *testing.T) {
 
 	h.Tick()
 
-	assertMessages(t, dev.Received(), []string{fixture(t, "hello.jsonl")})
+	assertMessages(t, dev.Received(), []string{fixture(t, "hello.jsonl"), defaultPreferences})
 }
 
 func TestDeviceClaimedLaterReceivesTheKnownSessions(t *testing.T) {
@@ -210,6 +210,7 @@ func TestDeviceClaimedLaterReceivesTheKnownSessions(t *testing.T) {
 
 	assertMessages(t, dev.Received(), []string{
 		fixture(t, "hello.jsonl"),
+		defaultPreferences,
 		fixture(t, "session-upsert.jsonl"),
 	})
 }
@@ -227,6 +228,7 @@ func TestClaimedDeviceGetsAHeartbeatEverySecond(t *testing.T) {
 
 	assertMessages(t, dev.Received(), []string{
 		fixture(t, "hello.jsonl"),
+		defaultPreferences,
 		fixture(t, "heartbeat.jsonl"),
 	})
 }
@@ -275,7 +277,7 @@ func TestOnlyStateChangesReachTheDeviceAndRestartTheStateClock(t *testing.T) {
 	clock.Advance(300 * time.Millisecond)
 	apply(t, h, host.Event{SessionID: "a", State: host.Done})
 
-	assertMessages(t, since(dev, 1), []string{
+	assertMessages(t, since(dev, 2), []string{
 		`{"type":"session_upsert","id":"a","state":"working","project_color":"#ff3030","state_entered":1760432400000,"tile":0}`,
 		`{"type":"session_upsert","id":"a","state":"done","project_color":"#ff3030","state_entered":1760432400600,"tile":0}`,
 	})
@@ -299,7 +301,7 @@ func TestSessionsKeepTheirTileAndNewcomersTakeTheFirstFreeOne(t *testing.T) {
 		host.Event{SessionID: "e", State: host.Idle},
 	)
 
-	assertMessages(t, since(dev, 1), []string{
+	assertMessages(t, since(dev, 2), []string{
 		`{"type":"session_upsert","id":"a","state":"working","project_color":"#a040ff","state_entered":1760432400000,"tile":0}`,
 		`{"type":"session_upsert","id":"b","state":"working","project_color":"#30e040","state_entered":1760432400000,"tile":1}`,
 		`{"type":"session_upsert","id":"c","state":"working","project_color":"#ff3030","state_entered":1760432400000,"tile":2}`,
@@ -327,7 +329,7 @@ func TestHostClaimsOnlyADeviceThatAnswersTheHandshakeEvenAfterBootNoise(t *testi
 			t.Errorf("%s got %q, want only the hello", name, got)
 		}
 	}
-	assertMessages(t, since(reference, 1), []string{
+	assertMessages(t, since(reference, 2), []string{
 		`{"type":"session_upsert","id":"a","state":"working","project_color":"#a040ff","state_entered":1760432400000,"tile":0}`,
 	})
 	if dev := h.Status().Device; !dev.Claimed || dev.Name != "fake3" || dev.Firmware != "0.1.0" {
@@ -372,6 +374,7 @@ func TestReplugGetsTheHandshakeAndEverySessionAgain(t *testing.T) {
 
 	assertMessages(t, plugged.Received(), []string{
 		`{"type":"hello","protocol":0,"host_time":1760432401000}`,
+		defaultPreferences,
 		`{"type":"session_upsert","id":"a","state":"working","project_color":"#a040ff","state_entered":1760432400000,"tile":0}`,
 		`{"type":"session_upsert","id":"b","state":"awaiting_input","project_color":"#30e040","state_entered":1760432400000,"tile":1}`,
 	})

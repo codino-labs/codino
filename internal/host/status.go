@@ -9,6 +9,9 @@ type Status struct {
 	Device         DeviceConnection `json:"device"`
 	// Showing is true while a picture is shown in Raw Mode (`codino show`).
 	Showing bool `json:"showing"`
+	// PreferencesProblem is why the config file is ignored (it is invalid);
+	// empty when its Preferences are in force.
+	PreferencesProblem string `json:"preferences_problem,omitempty"`
 }
 
 // SessionSummary is one Agent Session as the Session Tracker holds it.
@@ -42,7 +45,8 @@ func (h *Host) Status() Status {
 	h.mu.Lock()
 	defer h.unlock()
 	h.dropGoneDevice()
-	st := Status{AggregateState: h.sessions.aggregateState(), Sessions: []SessionSummary{}, Showing: h.showing != nil}
+	st := Status{AggregateState: h.sessions.aggregateState(), Sessions: []SessionSummary{}, Showing: h.showing != nil,
+		PreferencesProblem: h.prefsProblem}
 	for _, s := range h.sessions.ordered() {
 		st.Sessions = append(st.Sessions, SessionSummary{
 			ID: s.id, State: s.state, StateEntered: s.stateEntered,

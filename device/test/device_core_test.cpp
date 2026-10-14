@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -84,11 +85,18 @@ struct Device8x8 {
   device::DeviceCore core{profile8x8(), "0.1.0", clock};
 };
 
-// The same in the Aggregate Layout: the whole matrix shows the Aggregate
+// Preferences with the Aggregate Layout: the whole matrix shows the Aggregate
 // State however many sessions there are.
+device::Preferences aggregateLayout() {
+  device::Preferences p;
+  p.layout = device::Layout::Aggregate;
+  return p;
+}
+
+// A fresh 8x8 Device core in the Aggregate Layout.
 struct AggregateDevice8x8 {
   FakeClock clock;
-  device::DeviceCore core{profile8x8(), "0.1.0", clock, device::Escalation{}, device::Layout::Aggregate};
+  device::DeviceCore core{profile8x8(), "0.1.0", clock, aggregateLayout()};
 };
 
 }  // namespace
@@ -135,7 +143,7 @@ TEST_CASE("in the Aggregate Layout the matrix shows the most urgent Session Stat
       // Both arrival orders, and ids that sort either way.
       for (const auto& [first, second] : {std::pair{"a", "b"}, std::pair{"b", "a"}}) {
         FakeClock clock;
-        device::DeviceCore core(profile8x8(), "0.1.0", clock, device::Escalation{}, device::Layout::Aggregate);
+        device::DeviceCore core(profile8x8(), "0.1.0", clock, aggregateLayout());
         core.receive(upsert(first, less));
         core.receive(upsert(second, more));
 
@@ -734,10 +742,10 @@ TEST_CASE_FIXTURE(Device8x8, "a session that waits again escalates from the new 
 
 TEST_CASE("the Escalation thresholds are parameters") {
   FakeClock clock;
-  device::Escalation quick;
-  quick.fasterFromMs = 1 * kSecond;
-  quick.takeoverFromMs = 2 * kSecond;
-  quick.steadyFromMs = 3 * kSecond;
+  device::Preferences quick;
+  quick.escalation.fasterFromMs = 1 * kSecond;
+  quick.escalation.takeoverFromMs = 2 * kSecond;
+  quick.escalation.steadyFromMs = 3 * kSecond;
   device::DeviceCore core(profile8x8(), "0.1.0", clock, quick);
   core.receive(upsert("a", "awaiting_input", "#2ad14f"));
 
@@ -1066,7 +1074,7 @@ TEST_CASE("a session in the Overflow Tile can take the whole matrix over too") {
 
 TEST_CASE("the Aggregate Layout shows the Aggregate State on the whole matrix") {
   FakeClock clock;
-  device::DeviceCore core(profile8x8(), "0.1.0", clock, device::Escalation{}, device::Layout::Aggregate);
+  device::DeviceCore core(profile8x8(), "0.1.0", clock, aggregateLayout());
   core.receive(upsertTile("a", "done", "#2ad14f", 0));
   core.receive(upsertTile("b", "error", "#ff3da5", 1));
 
@@ -1219,4 +1227,423 @@ TEST_CASE("a frame has one pixel per LED of the Hardware Profile's matrix") {
   const auto& shown = core.render();
   CHECK(shown.at(15, 15) == device::Rgb{1, 2, 3});
   CHECK(shown.at(14, 15) == device::Rgb{});
+}
+
+// --- Preferences (#11) ------------------------------------------------------
+// The Host pushes the Preferences the Device renders by; the Device caches them
+// and boots with them. Brightness always stays under the Hardware Profile cap.
+
+namespace {
+
+std::string preferences(const std::string& fields) { return R"({"type":"preferences")" + (fields.empty() ? "" : "," + fields) + "}"; }
+
+}  // namespace
+
+TEST_CASE_FIXTURE(Device8x8, "a Preferences push changes the Layout at runtime") {
+  core.receive(upsertTile("a", "done", "#ff3da5", 0));
+  core.receive(upsertTile("b", "error", "#2ad14f", 1));
+  REQUIRE(isFilled(core.render(), kLeft, kPink));
+
+  CHECK(core.receive(preferences(R"("layout":"aggregate")")).empty());
+
+  CHECK(core.render() == loneSessionFrame("error"));
+
+  core.receive(preferences(R"("layout":"adaptive")"));
+
+  CHECK(isFilled(core.render(), kLeft, kPink));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "the preferences fixture is accepted and counts as hearing from the Host") {
+  core.receive(upsertTile("a", "done", "#ff3da5", 0));
+  core.receive(upsertTile("b", "error", "#2ad14f", 1));
+  clock.advance(kTimeout - 1);
+
+  CHECK(core.receive(fixture("preferences.jsonl")).empty());
+
+  // Aggregate Layout, turned upside down, at half the cap, with a
+  // Disconnected timeout of 10 s.
+  const auto& prefs = core.preferences();
+  CHECK(prefs.theme == "default");
+  CHECK(prefs.brightness == 50);
+  CHECK(prefs.layout == device::Layout::Aggregate);
+  CHECK(prefs.rotation == 180);
+  CHECK_FALSE(prefs.quietMode);
+  CHECK(prefs.disconnectedTimeoutMs == 10 * kSecond);
+  CHECK(prefs.escalation.fasterFromMs == 20 * kSecond);
+  CHECK(prefs.escalation.takeoverFromMs == 1 * kMinute);
+  CHECK(prefs.escalation.steadyFromMs == 5 * kMinute);
+  clock.advance(kTimeout);
+  CHECK(isSolidLit(core.render()));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "a Preferences push sets how long the Host may stay silent before Disconnected") {
+  core.receive(upsert("s1", "working"));
+  core.receive(preferences(R"("disconnected_timeout_ms":10000)"));
+
+  clock.advance(10 * kSecond - 1);
+  CHECK(core.render() == loneSessionFrame("working"));
+  clock.advance(1);
+  CHECK(core.render() == disconnectedFrame({"working"}));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "a Preferences push sets the Escalation thresholds") {
+  core.receive(preferences(R"("escalation_faster_ms":1000,"escalation_takeover_ms":2000,"escalation_steady_ms":3000)"));
+  core.receive(upsert("a", "awaiting_input", "#2ad14f"));
+
+  advanceWithHeartbeats(core, clock, 2 * kSecond);
+  CHECK(core.render().at(0, 0) == kGreen);
+  advanceWithHeartbeats(core, clock, 1 * kSecond);
+  CHECK(sameHue(core.render().at(0, 0), awaitingInputHue()));
+}
+
+TEST_CASE_FIXTURE(AggregateDevice8x8, "a field missing from a Preferences push takes the Device's default") {
+  core.receive(preferences(R"("brightness":50,"rotation":90)"));
+
+  core.receive(preferences(R"("quiet_mode":true)"));
+
+  const auto& prefs = core.preferences();
+  CHECK(prefs.brightness == 100);
+  CHECK(prefs.rotation == 0);
+  CHECK(prefs.quietMode);
+  CHECK(prefs.layout == device::Layout::Aggregate);  // the default this Device was built with
+}
+
+TEST_CASE("a Preferences push with any invalid field is ignored as a whole") {
+  const char* const invalid[] = {
+      R"("brightness":0)",
+      R"("brightness":101)",
+      R"("brightness":"50")",
+      R"("brightness":50.5)",
+      R"("layout":"tiles")",
+      R"("layout":1)",
+      R"("rotation":45)",
+      R"("rotation":-90)",
+      R"("quiet_mode":"yes")",
+      R"("theme":"")",
+      R"("theme":7)",
+      R"("theme":"a-theme-name-longer-than-thirty-two")",
+      R"("disconnected_timeout_ms":999)",
+      R"("disconnected_timeout_ms":-1)",
+      R"("escalation_faster_ms":200000)",  // after the Takeover
+      R"("escalation_takeover_ms":1000000)",  // after the steady glow
+  };
+  for (const char* field : invalid) {
+    CAPTURE(field);
+    FakeClock clock;
+    device::DeviceCore core(profile8x8(), "0.1.0", clock);
+    core.receive(upsert("s1", "working"));
+    clock.advance(kTimeout - 1);
+
+    core.receive(preferences(std::string(R"("layout":"aggregate","quiet_mode":true,)") + field));
+
+    CHECK(core.preferences().layout == device::Layout::Adaptive);
+    CHECK_FALSE(core.preferences().quietMode);
+    clock.advance(1);  // an unusable message doesn't count as hearing from the Host
+    CHECK(core.render() == disconnectedFrame({"working"}));
+  }
+}
+
+TEST_CASE_FIXTURE(Device8x8, "a hello keeps the Preferences") {
+  core.receive(preferences(R"("layout":"aggregate")"));
+
+  core.receive(fixture("hello.jsonl"));
+
+  CHECK(core.preferences().layout == device::Layout::Aggregate);
+}
+
+// --- Brightness cap ---------------------------------------------------------
+
+namespace {
+
+// The brightest channel anywhere in the frame.
+int brightestChannel(const device::PixelBuffer& frame) {
+  int brightest = 0;
+  for (uint8_t y = 0; y < frame.height(); ++y)
+    for (uint8_t x = 0; x < frame.width(); ++x) {
+      const device::Rgb c = frame.at(x, y);
+      brightest = std::max({brightest, int{c.r}, int{c.g}, int{c.b}});
+    }
+  return brightest;
+}
+
+device::HardwareProfile cappedProfile(uint8_t cap) {
+  device::HardwareProfile p = profile8x8();
+  p.brightnessCap = cap;
+  return p;
+}
+
+// The brightest any LED gets while `script` drives a Device with this cap
+// and these Preferences, over `ms` of frames with the Host's heartbeat (or
+// one frame and no heartbeat for `ms` 0).
+template <typename Script>
+int brightestUnder(uint8_t cap, const std::string& prefs, uint32_t ms, Script script) {
+  FakeClock clock;
+  device::DeviceCore core(cappedProfile(cap), "0.1.0", clock);
+  core.receive(preferences(prefs));
+  script(core, clock);
+  int brightest = brightestChannel(core.render());
+  for (uint32_t t = 0; t < ms; t += 20, clock.advance(20)) {
+    if (t % kSecond == 0) core.receive(heartbeat(clock));
+    brightest = std::max(brightest, brightestChannel(core.render()));
+  }
+  return brightest;
+}
+
+}  // namespace
+
+TEST_CASE("every LED stays under the Hardware Profile's brightness cap, whatever is shown") {
+  // A bright Project Color and a Raw Mode frame at full white.
+  std::string white(1, device::DeviceCore::kRawFrameStart);
+  white += std::string(8 * 8 * 3, '\xFF');
+  const struct {
+    const char* name;
+    std::function<void(device::DeviceCore&, FakeClock&)> script;
+    uint32_t watchMs;
+  } scenes[] = {
+      {"every Session State", [](auto& core, auto&) {
+         int i = 0;
+         for (const char* s : kStatesByUrgency) core.receive(upsertTile(s, s, "#ffffff", i++));
+       }, 2 * kSecond},
+      {"the faster, brighter pulse", [](auto& core, auto& clock) {
+         core.receive(upsert("a", "awaiting_input", "#ffffff"));
+         advanceWithHeartbeats(core, clock, 40 * kSecond);
+       }, 2 * kSecond},
+      {"a Takeover", [](auto& core, auto& clock) {
+         core.receive(upsert("a", "awaiting_input", "#ffffff"));
+         advanceWithHeartbeats(core, clock, 3 * kMinute);
+       }, 2 * kSecond},
+      {"Disconnected", [](auto&, auto& clock) { clock.advance(kTimeout); }, 0},
+      {"a Raw Mode frame", [&white](auto& core, auto&) {
+         core.receive(fixture("raw-mode-enter.jsonl"));
+         core.receive(white);
+       }, 2 * kSecond},
+  };
+  for (const auto& scene : scenes) {
+    CAPTURE(scene.name);
+    for (uint8_t cap : {uint8_t{48}, uint8_t{128}}) {
+      CAPTURE(int{cap});
+      const int full = brightestUnder(cap, R"("brightness":100)", scene.watchMs, scene.script);
+      CHECK(full <= cap);
+      CHECK(full > 0);
+      // The brightness Preference scales under the cap.
+      const int half = brightestUnder(cap, R"("brightness":50)", scene.watchMs, scene.script);
+      CHECK(half <= cap / 2 + 1);
+      CHECK(half < full);
+    }
+  }
+}
+
+TEST_CASE("a Raw Mode frame at full white is shown at the cap") {
+  std::string white(1, device::DeviceCore::kRawFrameStart);
+  white += std::string(8 * 8 * 3, '\xFF');
+  FakeClock clock;
+  device::DeviceCore core(cappedProfile(48), "0.1.0", clock);
+  core.receive(fixture("raw-mode-enter.jsonl"));
+  core.receive(white);
+
+  const auto& frame = core.render();
+
+  CHECK(isSolidLit(frame));
+  CHECK(frame.at(0, 0) == device::Rgb{48, 48, 48});
+}
+
+TEST_CASE("on a dim Device a dim pattern stays lit") {
+  FakeClock clock;
+  device::DeviceCore core(cappedProfile(8), "0.1.0", clock);
+  core.receive(preferences(R"("brightness":1)"));
+
+  clock.advance(kTimeout);
+
+  CHECK(isSparse(core.render()));  // Disconnected still shows, never a dark matrix
+}
+
+// --- Rotation ---------------------------------------------------------------
+
+TEST_CASE("the rotation Preference turns the picture clockwise on the matrix") {
+  const struct {
+    int degrees;
+    Region left;  // where the left half of the picture goes
+  } turns[] = {{0, kLeft}, {90, {0, 0, 8, 4}}, {180, kRight}, {270, {0, 4, 8, 8}}};
+  for (const auto& turn : turns) {
+    CAPTURE(turn.degrees);
+    FakeClock clock;
+    device::DeviceCore core(profile8x8(), "0.1.0", clock);
+    core.receive(preferences(R"("rotation":)" + std::to_string(turn.degrees)));
+    core.receive(upsertTile("a", "done", "#ff3da5", 0));
+    core.receive(upsertTile("b", "done", "#2ad14f", 1));
+
+    const auto& frame = core.render();
+
+    CHECK(isFilled(frame, turn.left, kPink));
+  }
+}
+
+TEST_CASE("turned sideways, a matrix that isn't square lays the picture out in the turned shape") {
+  FakeClock clock;
+  device::HardwareProfile wide = profile8x8();
+  wide.width = 8;
+  wide.height = 4;
+  device::DeviceCore core(wide, "0.1.0", clock);
+  core.receive(preferences(R"("rotation":90)"));
+  core.receive(upsertTile("a", "done", "#ff3da5", 0));
+  core.receive(upsertTile("b", "done", "#2ad14f", 1));
+
+  const auto& frame = core.render();
+
+  // The picture is 4 wide and 8 tall: its left half (2 x 8) turns into the
+  // top half of the 8 x 4 matrix.
+  CHECK(frame.width() == 8);
+  CHECK(frame.height() == 4);
+  CHECK(isFilled(frame, {0, 0, 8, 2}, kPink));
+  CHECK(isFilled(frame, {0, 2, 8, 4}, kGreen));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "a Raw Mode frame turns with the rotation too") {
+  core.receive(preferences(R"("rotation":180)"));
+  core.receive(fixture("raw-mode-enter.jsonl"));
+  core.receive(fixture("raw-frame.bin"));
+
+  const auto& frame = core.render();
+
+  CHECK(frame.at(7, 7) == rawFixturePixel(0, 0));
+  CHECK(frame.at(0, 0) == rawFixturePixel(7, 7));
+  CHECK(frame.at(5, 6) == rawFixturePixel(2, 1));
+}
+
+// --- Quiet Mode -------------------------------------------------------------
+
+TEST_CASE("Quiet Mode shows nothing but Awaiting Input") {
+  for (const char* state : {"idle", "working", "done", "error"}) {
+    CAPTURE(state);
+    FakeClock clock;
+    device::DeviceCore core(profile8x8(), "0.1.0", clock);
+    core.receive(preferences(R"("quiet_mode":true)"));
+
+    core.receive(upsert("s1", state));
+
+    CHECK(isDark(core.render()));
+  }
+}
+
+TEST_CASE_FIXTURE(Device8x8, "in Quiet Mode Awaiting Input shows as it always does") {
+  core.receive(preferences(R"("quiet_mode":true)"));
+
+  core.receive(upsert("s1", "awaiting_input"));
+
+  CHECK(core.render() == loneSessionFrame("awaiting_input"));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "in Quiet Mode only the Tiles of sessions Awaiting Input are lit") {
+  core.receive(preferences(R"("quiet_mode":true)"));
+  core.receive(upsertTile("a", "error", "#ff3da5", 0));
+  core.receive(upsertTile("b", "awaiting_input", "#2ad14f", 1));
+  core.receive(upsertTile("c", "working", "#3a86ff", 2));
+
+  const auto& frame = core.render();
+
+  CHECK(isDark(frame, kTopLeft));
+  CHECK(isLitIn(frame, kTopRight, kGreen));
+  CHECK(isDark(frame, kBottomLeft));
+  CHECK(isDark(frame, kBottomRight));
+}
+
+TEST_CASE_FIXTURE(AggregateDevice8x8, "Quiet Mode never suppresses Escalation: it escalates to a Takeover") {
+  core.receive(preferences(R"("quiet_mode":true)"));
+  core.receive(upsert("a", "awaiting_input", "#2ad14f"));
+  core.receive(upsert("b", "error", "#ff3da5"));
+  const Watched gentle = watch(core, clock, 10 * kSecond);
+  advanceWithHeartbeats(core, clock, 20 * kSecond);
+
+  const Watched faster = watch(core, clock, 10 * kSecond);
+
+  CHECK(faster.peaks > gentle.peaks);
+  advanceWithHeartbeats(core, clock, 2 * kMinute);
+  CHECK(isSolidLit(core.render()));
+  CHECK(core.render().at(0, 0) == kGreen);
+}
+
+TEST_CASE_FIXTURE(Device8x8, "Quiet Mode still shows Disconnected") {
+  core.receive(preferences(R"("quiet_mode":true)"));
+  core.receive(upsert("s1", "working"));
+
+  clock.advance(kTimeout);
+
+  CHECK(isSparse(core.render()));
+}
+
+// --- Cached Preferences -----------------------------------------------------
+
+namespace {
+
+// The firmware shell's flash, in memory.
+class FakeCache : public device::PreferencesCache {
+ public:
+  std::string load() override { return saved; }
+  void save(std::string_view line) override {
+    saved = std::string(line);
+    ++saves;
+  }
+  std::string saved;
+  int saves = 0;
+};
+
+}  // namespace
+
+TEST_CASE("the Device caches the Preferences a push changes, and only then") {
+  FakeClock clock;
+  FakeCache cache;
+  device::DeviceCore core(profile8x8(), "0.1.0", clock, {}, &cache);
+
+  core.receive(fixture("preferences.jsonl"));
+  core.receive(fixture("preferences.jsonl"));
+
+  CHECK(cache.saves == 1);
+  JsonDocument saved, pushed;
+  REQUIRE_FALSE(deserializeJson(saved, cache.saved));
+  REQUIRE_FALSE(deserializeJson(pushed, fixture("preferences.jsonl")));
+  CHECK_MESSAGE(saved == pushed, "saved: " << cache.saved);
+  core.receive(preferences(R"("theme":"default")"));  // nothing else: the defaults again
+  CHECK(cache.saves == 2);
+}
+
+TEST_CASE("a Device boots with its cached Preferences before any Host connects") {
+  FakeClock clock;
+  FakeCache cache;
+  cache.saved = preferences(R"("brightness":50,"rotation":90,"disconnected_timeout_ms":10000,"layout":"aggregate")");
+
+  device::DeviceCore core(cappedProfile(200), "0.1.0", clock, {}, &cache);
+
+  CHECK(core.preferences().layout == device::Layout::Aggregate);
+  clock.advance(kTimeout);
+  CHECK(isDark(core.render()));  // not Disconnected yet: the cached timeout is 10 s
+  clock.advance(10 * kSecond - kTimeout);
+  const device::PixelBuffer turned = core.render();
+  CHECK(isSparse(turned));
+  CHECK(brightestChannel(turned) <= 100);
+
+  // The same Disconnected, upright, turns into it clockwise.
+  FakeClock otherClock;
+  device::DeviceCore unturned(cappedProfile(200), "0.1.0", otherClock);
+  unturned.receive(preferences(R"("brightness":50)"));
+  otherClock.advance(kTimeout);
+  const device::PixelBuffer upright = unturned.render();
+  CHECK(upright != turned);
+  for (uint8_t y = 0; y < 8; ++y)
+    for (uint8_t x = 0; x < 8; ++x) CHECK(turned.at(static_cast<uint8_t>(7 - y), x) == upright.at(x, y));
+}
+
+TEST_CASE("a cache without valid Preferences boots with the defaults") {
+  for (const char* line : {"", "not json", R"({"type":"preferences","brightness":0})"}) {
+    CAPTURE(line);
+    FakeClock clock;
+    FakeCache cache;
+    cache.saved = line;
+    device::Preferences defaults = aggregateLayout();
+
+    device::DeviceCore core(profile8x8(), "0.1.0", clock, defaults, &cache);
+
+    CHECK(core.preferences().layout == device::Layout::Aggregate);
+    CHECK(core.preferences().brightness == 100);
+    CHECK(cache.saves == 0);
+  }
 }

@@ -5,6 +5,9 @@
 //	codino event --session ID --end
 //	codino event --session ID --acknowledge [--state STATE]
 //	codino show IMAGE
+//	codino get [KEY]
+//	codino set KEY VALUE
+//	codino unset KEY
 //	codino status [--json]
 //	codino daemon [--virtual-device PATH] [--exit-grace DURATION]
 //	codino hook   (internal: run by the Claude Code plugin's hooks)
@@ -50,6 +53,9 @@ const usage = `usage:
   codino event --session ID --end
   codino event --session ID --acknowledge [--state STATE]
   codino show IMAGE
+  codino get [KEY]
+  codino set KEY VALUE
+  codino unset KEY
   codino status [--json]
   codino daemon [--virtual-device PATH] [--exit-grace DURATION]
   codino hook   (internal: Claude Code hooks pipe their JSON to it)
@@ -59,6 +65,22 @@ STATE is one of: idle, working, awaiting_input, done, error.
 and restarts the Escalation of Awaiting Input.
 show: puts a PNG, JPEG or GIF on the Device in Raw Mode, scaled to its matrix,
 an animated GIF looping, until Ctrl-C; Awaiting Input always shows over it.
+get, set, unset: read and change the Preferences in the config file
+($CODINO_CONFIG, else $XDG_CONFIG_HOME/codino/config.toml, else
+~/.config/codino/config.toml). The Host Daemon applies a change within a
+second. get with no KEY lists every Preference. Keys:
+  theme                 default
+  brightness            1-100, percent of the Device's brightness cap
+  layout                adaptive or aggregate
+  rotation              0, 90, 180 or 270 (degrees clockwise)
+  quiet_mode            true or false: show nothing but Awaiting Input
+  done_decay            e.g. 10m: how long Done shows before it decays to Idle
+  disconnected_timeout  e.g. 5s (2s-1h): Host silence before Disconnected
+  escalation.faster     e.g. 30s: Awaiting Input pulses faster and brighter
+  escalation.takeover   e.g. 2m: the waiting session takes the matrix over
+  escalation.steady     e.g. 10m: Escalation settles into a steady glow
+  project_colors.PATH   #rrggbb pinned to the git repo PATH is in (PATH may be .)
+unset returns a Preference to its default.
 `
 
 func main() {
@@ -77,6 +99,12 @@ func main() {
 		err = event(paths, args)
 	case "show":
 		err = show(paths, args, os.Stdout)
+	case "get":
+		err = get(args, os.Stdout)
+	case "set":
+		err = set(args, os.Stdout)
+	case "unset":
+		err = unset(args)
 	case "status":
 		err = status(paths, args, os.Stdout)
 	case "daemon":
@@ -218,6 +246,9 @@ func status(paths daemon.Paths, args []string, out io.Writer) error {
 }
 
 func printStatus(out io.Writer, st host.Status, now time.Time) {
+	if st.PreferencesProblem != "" {
+		fmt.Fprintf(out, "Preferences: the config file is ignored: %s\n", st.PreferencesProblem)
+	}
 	switch d := st.Device; {
 	case d.Claimed:
 		fmt.Fprintf(out, "Device: %s (firmware %s, protocol %d)\n", d.Name, d.Firmware, d.Protocol)
@@ -282,16 +313,24 @@ func runDaemon(paths daemon.Paths, args []string) error {
 		if err != nil {
 			return fmt.Errorf("virtual device: %w", err)
 		}
-		devices = devicelink.VirtualDevice{Path: path, Display: os.Stderr}
+		// Its Preferences cache lives as long as the runtime directory, as a
+		// Device's lives in flash.
+		devices = devicelink.VirtualDevice{Path: path, Display: os.Stderr,
+			Args: []string{"--preferences-file", filepath.Join(paths.Dir, "virtual-device-preferences.jsonl")}}
 	}
-	h := host.New(systemClock{}, devices, host.WithExitGrace(exitGrace),
+	config, err := configFile()
+	if err != nil {
+		return err
+	}
+	h := host.New(systemClock{}, devices, host.WithExitGrace(exitGrace), host.WithPreferences(config),
 		host.WithTranscriptProbe(claudecode.Transcripts{}), host.WithLivenessProbe(liveness.Probe{}),
 		host.WithProjectRoots(gitrepo.Roots{}))
 	defer h.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	slog.Info("Host Daemon listening", "socket", paths.Socket, "virtual_device", *virtual, "exit_grace", exitGrace)
+	slog.Info("Host Daemon listening", "socket", paths.Socket, "virtual_device", *virtual, "exit_grace", exitGrace,
+		"preferences", config.Path)
 	if err := daemon.Run(ctx, ln, h); err != nil {
 		return err
 	}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/codino-labs/codino/internal/devicelink"
+	"github.com/codino-labs/codino/internal/preferences"
 	"github.com/codino-labs/codino/internal/protocol"
 )
 
@@ -43,8 +44,15 @@ type Host struct {
 	lastFailedClaim time.Time
 	closed          bool
 
-	doneDecay time.Duration
-	roots     ProjectRootProbe
+	// prefs are the Preferences in force: the config file's last valid
+	// ones. prefsProblem is why the file is ignored, if it is.
+	prefsSource  PreferencesSource
+	prefs        preferences.Preferences
+	prefsProblem string
+	// lastPrefsPoll is when Tick last read the config file.
+	lastPrefsPoll time.Time
+
+	roots ProjectRootProbe
 
 	exitGrace time.Duration
 	// emptySince is when the last session ended (or the Host started without
@@ -114,15 +122,23 @@ const StaleAfter = 15 * time.Minute
 // whether each session's Agent is still alive.
 const ProbeInterval = time.Second
 
-// DefaultDoneDecay is how long a session stays Done before it decays to Idle,
-// unless the human Acknowledges it first. It becomes a Preference (#11).
-const DefaultDoneDecay = 10 * time.Minute
-
-// WithDoneDecay sets how long a session stays Done before it decays to Idle
-// (default DefaultDoneDecay).
-func WithDoneDecay(d time.Duration) Option {
-	return func(h *Host) { h.doneDecay = d }
+// PreferencesSource reads the Preferences: the config file, canonical for
+// them. An error means the file is invalid; the Host keeps the Preferences
+// it has.
+type PreferencesSource interface {
+	Load() (preferences.Preferences, error)
 }
+
+// WithPreferences makes the Host follow the Preferences of src (default: the
+// defaults): it reads them when created and every PreferencesPollInterval,
+// and pushes them to the Device on claiming it and when they change.
+func WithPreferences(src PreferencesSource) Option {
+	return func(h *Host) { h.prefsSource = src }
+}
+
+// PreferencesPollInterval is how often the Host reads the config file, so an
+// edit reaches the Device about a second later.
+const PreferencesPollInterval = time.Second
 
 // DefaultExitGrace is how long the Host Daemon stays up with no sessions.
 const DefaultExitGrace = 5 * time.Minute
@@ -143,13 +159,16 @@ func New(clock Clock, devices devicelink.Discoverer, opts ...Option) *Host {
 		devices:    devices,
 		sessions:   newTracker(),
 		exitGrace:  DefaultExitGrace,
-		doneDecay:  DefaultDoneDecay,
+		prefs:      preferences.Defaults(),
 		roots:      sameDir{},
 		emptySince: clock.Now(),
 		retired:    make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(h)
+	}
+	if h.prefsSource != nil {
+		h.reloadPreferences()
 	}
 	return h
 }
@@ -228,12 +247,12 @@ func (h *Host) Tick() {
 		close(h.retired)
 	}
 	h.dropGoneDevice()
-	for _, s := range h.sessions.decayDone(h.clock.Now(), h.doneDecay) {
+	for _, s := range h.sessions.decayDone(h.clock.Now(), h.prefs.DoneDecay) {
 		h.send(upsert(s))
 	}
 	if h.device != nil {
 		if now := h.clock.Now(); now.Sub(h.lastHeartbeat) >= HeartbeatInterval {
-			silent := now.Sub(h.lastHeartbeat) >= DisconnectedTimeout
+			silent := now.Sub(h.lastHeartbeat) >= h.prefs.DisconnectedTimeout
 			h.send(protocol.NewHeartbeat(now.UnixMilli()))
 			h.lastHeartbeat = now
 			h.refreshShow(silent)
@@ -243,7 +262,11 @@ func (h *Host) Tick() {
 	look := h.device == nil && !h.closed &&
 		(h.lastFailedClaim.IsZero() || h.clock.Now().Sub(h.lastFailedClaim) >= ClaimRetryInterval)
 	targets := h.toProbe()
+	reload := h.prefsSource != nil && h.clock.Now().Sub(h.lastPrefsPoll) >= PreferencesPollInterval
 	h.unlock()
+	if reload {
+		h.reloadPreferences()
+	}
 	if look {
 		h.claim()
 	}
@@ -350,6 +373,7 @@ func (h *Host) claim() {
 	h.deviceProblem = ""
 	h.lastFailedClaim = time.Time{}
 	h.lastHeartbeat = now // hello counts as one
+	h.send(preferencesPush(h.prefs))
 	for _, s := range h.sessions.ordered() {
 		h.send(upsert(s))
 		if s.state == AwaitingInput && !s.acknowledged.IsZero() {
@@ -388,11 +412,6 @@ func (h *Host) acknowledgeAll() {
 
 // HeartbeatInterval is how often the Host tells a claimed Device it is alive.
 const HeartbeatInterval = time.Second
-
-// DisconnectedTimeout is how long a Device waits for the Host before it shows
-// Disconnected (and leaves Raw Mode). The Device's default, until Preferences
-// carry it (#11).
-const DisconnectedTimeout = 5 * time.Second
 
 // send writes to the claimed Device, if any. A failed write drops the Device;
 // the next Tick claims one again. Callers hold h.mu.

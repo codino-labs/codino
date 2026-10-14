@@ -2,7 +2,7 @@
 
 The wire protocol between the Host Daemon and a Device (or a Virtual Device). It is semantic (ADR-0001): the Host says what state each Agent Session is in, and the Device decides how that looks.
 
-v0 covers the handshake, session upsert, session remove, heartbeat, acknowledge, Disconnected and Raw Mode. Later kinds from the v1 spec (Preferences push, Theme and Sprite Pack upload, preview-state override) will be added here with their own fixtures.
+v0 covers the handshake, session upsert, session remove, heartbeat, acknowledge, Disconnected, Raw Mode and the Preferences push. Later kinds from the v1 spec (Theme and Sprite Pack upload, preview-state override) will be added here with their own fixtures.
 
 ## Framing
 
@@ -20,7 +20,7 @@ The Host opens the link with `hello`. The Device answers with `hello_reply`. The
 
 A Device answers every `hello`, whatever its fields, so that a Host speaking any protocol version learns which version the Device speaks.
 
-A `hello` starts a new link: the Device forgets every Agent Session it holds, and the Host follows a successful handshake with a `session_upsert` for every session it knows. Sessions from an earlier Host Daemon never linger.
+A `hello` starts a new link: the Device forgets every Agent Session it holds (it keeps its Preferences), and the Host follows a successful handshake with a `preferences` push, then a `session_upsert` for every session it knows. Sessions from an earlier Host Daemon never linger.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -43,7 +43,7 @@ Hardware Profile fields:
 | `data_pin` | integer | GPIO driving the LED data line. |
 | `serpentine` | bool | `true` when alternate rows run in reverse (zig-zag wiring). |
 | `color_order` | string | LED channel order, e.g. `"GRB"`. |
-| `brightness_cap` | integer 0–255 | Maximum brightness, enforced whatever the Preferences say. |
+| `brightness_cap` | integer 0–255 | Maximum brightness of any LED channel, enforced on everything the Device shows whatever the Preferences say (below). |
 | `current_cap_ma` | integer | Current budget for the matrix, in mA. |
 | `button`, `imu` | bool | Which inputs the build has. |
 
@@ -102,16 +102,16 @@ A Device needs nothing but the `type`: without `id` the Acknowledge is for every
 
 ## Escalation and Done decay
 
-Escalation is the Device's (ADR-0001): it renders it from `state_entered`, the latest `acknowledge` and its own clock, relating Host times to its clock through the `host_time` of `hello` and `heartbeat`. A Host time after the Device's estimate of now counts as now. Defaults, until Preferences carry them: a gentle pulse for 30 s, faster and brighter until 2 min, a Takeover of the whole matrix in the waiting session's `project_color` until 10 min (cycling between the Project Colors of every session in Takeover, one a second), then a steady glow. Where the whole matrix shows the Aggregate State (below), it shows the most insistent step any Awaiting Input session has reached; a Tile shows its own session's step: Takeover, faster, gentle, steady glow (a session that has just started to wait outranks one that settled).
+Escalation is the Device's (ADR-0001): it renders it from `state_entered`, the latest `acknowledge` and its own clock, relating Host times to its clock through the `host_time` of `hello` and `heartbeat`. A Host time after the Device's estimate of now counts as now. The thresholds are Preferences (below); by default: a gentle pulse for 30 s, faster and brighter until 2 min, a Takeover of the whole matrix in the waiting session's `project_color` until 10 min (cycling between the Project Colors of every session in Takeover, one a second), then a steady glow. Where the whole matrix shows the Aggregate State (below), it shows the most insistent step any Awaiting Input session has reached; a Tile shows its own session's step: Takeover, faster, gentle, steady glow (a session that has just started to wait outranks one that settled).
 
-Done decay is the Host's: the Session Tracker returns a session that stayed Done for the Done decay time (10 min by default) to Idle, as an Acknowledge of that session only, and sends its `session_upsert` (`state_entered` is when the decay was due). The Host is canonical for Session States, so `codino status` and the Device never disagree about a decayed session.
+Done decay is the Host's: the Session Tracker returns a session that stayed Done for the Done decay time (a Preference, 10 min by default) to Idle, as an Acknowledge of that session only, and sends its `session_upsert` (`state_entered` is when the decay was due). The Host is canonical for Session States, so `codino status` and the Device never disagree about a decayed session.
 
 ## Disconnected
 
-Every message the Device can use (`hello`, `heartbeat`, a valid `session_upsert`, `session_remove` or `acknowledge`, `raw_mode_enter`, `raw_mode_exit`, a Raw Mode frame it shows) tells it the Host is alive; lines it ignores don't. When nothing usable has arrived for the Disconnected timeout, the Device shows Disconnected. It counts from boot too, so a Device that never heard from a Host shows it as well.
+Every message the Device can use (`hello`, `heartbeat`, a valid `session_upsert`, `session_remove`, `acknowledge` or `preferences`, `raw_mode_enter`, `raw_mode_exit`, a Raw Mode frame it shows) tells it the Host is alive; lines it ignores don't. When nothing usable has arrived for the Disconnected timeout, the Device shows Disconnected. It counts from boot too, so a Device that never heard from a Host shows it as well.
 
-- The timeout is 5 seconds for now. It becomes a Preference, carried by the Preferences push.
-- Disconnected is not a Session State. It hides the sessions, because the Device no longer knows their state, and it never looks like Idle: v0 draws a dim diagonal line on a dark matrix.
+- The timeout is a Preference (`disconnected_timeout_ms`, 5 seconds by default), which a Device boots with from its cache, so it applies before any Host connects.
+- Disconnected is not a Session State. It hides the sessions, because the Device no longer knows their state, and it never looks like Idle: v0 draws a dim diagonal line on a dark matrix. It shows in Quiet Mode too.
 - The next usable message ends it. A heartbeat brings back the sessions the Device holds; a `hello` replaces them.
 - Disconnected ends Raw Mode (above).
 - A Host Daemon that exits stops the heartbeats too, so the Device shows Disconnected until the next Host Daemon says `hello`.
@@ -138,7 +138,7 @@ The pixels of one frame, as one line of bytes:
 | 3 × width × height | One LED after another, row-major from the top-left of the logical matrix (the Device maps it to its wiring, serpentine and color order), each as R, G, B, 0–255. No byte is `0x0A`: the Host sends 11 for a channel at 10, an invisible difference. |
 | 1 | `0x0A` (`\n`). |
 
-The length is not sent: width and height are the Device's, from the `hardware_profile` of its `hello_reply`, and the Host scales every picture to them. A Device uses a frame only in Raw Mode and only when it holds exactly `1 + 3 × width × height` bytes before the newline; it ignores any other frame as a whole, like an unusable JSON message. Transports must pass a frame's bytes unchanged: a trailing `\r` is not stripped from a frame.
+The length is not sent: width and height are the Device's, from the `hardware_profile` of its `hello_reply`, swapped while the `rotation` Preference is 90 or 270 (the picture is seen turned sideways), and the Host scales every picture to them. The Device turns the frame by the rotation and scales it under its brightness cap like everything it shows. A Device uses a frame only in Raw Mode and only when it holds exactly `1 + 3 × width × height` bytes before the newline; it ignores any other frame as a whole, like an unusable JSON message. Transports must pass a frame's bytes unchanged: a trailing `\r` is not stripped from a frame.
 
 Why one line: because no pixel byte is a newline, a frame is framed like any JSON message, and every receiver resynchronises the same way: at the next `\n`. A frame cut short (a Host that died mid-frame) runs into the next line and is ignored for its wrong length, losing that line too (should the two add up to a frame's length exactly, they show as noise until the next frame); the Host's next message, at the latest its next heartbeat a second later, arrives whole.
 
@@ -149,7 +149,7 @@ Size: a 16×16 matrix makes 770-byte lines (8×8: 194), so a Device's line buffe
 - **Pre-emption.** While any session is Awaiting Input the Device renders as if not in Raw Mode: the Aggregate State or Tiles, with Escalation and Takeover going on as usual. It stays in Raw Mode meanwhile: once no session is Awaiting Input, the latest frame shows again. The Host keeps streaming either way.
 - **The Host gone.** Disconnected ends Raw Mode, and so does `hello`: the Host that streamed the pixels is gone. After Disconnected the next heartbeat brings back the Device's own rendering, not the old pixels; a Host that still has a picture to show sends `raw_mode_enter` again after the `session_upsert`s of a new handshake.
 - `raw_mode_enter`, `raw_mode_exit` and a frame the Device uses all tell the Device the Host is alive (Disconnected, below).
-- No brightness cap yet: the Device shows frames as sent, until it enforces the Hardware Profile's `brightness_cap` on every frame.
+- Quiet Mode doesn't hide Raw Mode: the human asked for those pixels (`codino show`).
 
 ### What the Host sends (`codino show`)
 
@@ -164,7 +164,7 @@ A show keeps the Host Daemon from retiring, as sessions do.
 
 ## Layout and Tiles
 
-How the matrix is used is the Device's Layout, a Device-side setting until the Preferences push carries it (#11):
+How the matrix is used is the Device's Layout, the `layout` Preference:
 
 - **Adaptive** (the default): one Tile per Agent Session. One session has the whole matrix, two get halves (left, right), three or four get quadrants (top-left, top-right, bottom-left, bottom-right), five to eight get one column each (an eighth of the width, from the left). With nine or more, seven sessions get columns and the eighth column is the Overflow Tile, which shows the Aggregate State of the rest.
 - **Aggregate**: the whole matrix shows the Aggregate State, however many sessions there are.
@@ -179,7 +179,31 @@ With one session, or in the Aggregate Layout, the Device shows the Aggregate Sta
 
 With several sessions in the adaptive Layout each Tile is lit in its session's Project Color and animated by its Session State: Idle is a dim steady glow, Working a bright row running down a dimmer Tile, Done steadily lit, Error blinking, Awaiting Input pulsing with its own Escalation step (a gentle pulse, then a faster and brighter one, then a steady glow). Free Tiles are dark. The Overflow Tile is animated the same way by the Aggregate State of its sessions, in that Session State's own color, since it stands for several projects. A Takeover takes the whole matrix in either Layout.
 
-Themes and enforcing the Hardware Profile's `brightness_cap` come later: Escalation's brightness steps are fractions of full brightness, which the cap will scale.
+Themes come later (#12): v0 renders every `theme` alike. Escalation's brightness steps are fractions of full brightness, which the brightness cap scales like every other pixel (below). In Quiet Mode the matrix shows only Awaiting Input: the Aggregate State is dark unless it is Awaiting Input, and every Tile but those of sessions Awaiting Input (and an Overflow Tile holding one) is dark. Escalation and Takeover go on as usual.
+
+## Preferences (Host → Device)
+
+The user's Preferences live in a config file on the Host, which is canonical (`codino get/set`). The Host pushes the ones the Device renders by; it keeps the others (Done decay, pinned Project Colors) to itself.
+
+### `preferences`
+
+Sent after `hello_reply`, before the `session_upsert`s, on every claim, and again whenever the config file changes what it carries.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `theme` | string, 1–32 bytes | The Theme's name. v0 keeps it and renders every Theme alike. |
+| `brightness` | integer 1–100 | Percent of the Hardware Profile's `brightness_cap`. |
+| `layout` | string | `adaptive` or `aggregate` (Layout and Tiles, above). |
+| `rotation` | integer | `0`, `90`, `180` or `270`: degrees the picture is turned clockwise on the matrix. |
+| `quiet_mode` | bool | Show nothing but Awaiting Input (Rendering, above). |
+| `disconnected_timeout_ms` | integer ≥ 1000 | Host silence before Disconnected. |
+| `escalation_faster_ms`, `escalation_takeover_ms`, `escalation_steady_ms` | integer | When each Escalation step starts (Escalation, above), in order: faster ≤ takeover ≤ steady (two at the same time skip the first of them). |
+
+A push is the whole set: a field the Device doesn't find takes the Device's default (`default`, 100, `adaptive`, 0, `false`, 5000, 30000, 120000, 600000, as the Host's defaults), not its previous value. A field present with an invalid value makes the Device ignore the whole message, which then doesn't count as hearing from the Host either.
+
+- **Brightness.** Every LED channel the Device shows (Session States, Escalation's steps, Takeover, Disconnected, Raw Mode frames) is scaled to `brightness_cap × brightness / 100` of full; a lit channel stays at least 1, so dim patterns never go dark on a dim Device. Whatever the Preferences say, nothing exceeds the cap.
+- **Rotation.** The Device lays the picture out in the turned shape (a 16×8 matrix turned by 90 shows an 8×16 picture) and turns it onto the LEDs, Raw Mode frames included.
+- **Cached.** The Device keeps the last Preferences it was pushed (in flash; the terminal Virtual Device in its `--preferences-file`) and boots with them, so the Disconnected timeout, brightness and rotation apply before any Host connects. It writes the cache only when a push changes them.
 
 ## Fixtures
 
@@ -197,5 +221,6 @@ Themes and enforcing the Hardware Profile's `brightness_cap` come later: Escalat
 | `raw-mode-enter.jsonl` | Host → Device |
 | `raw-mode-exit.jsonl` | Host → Device |
 | `raw-frame.bin` | Host → Device: a frame for the 8×8 reference build, the LED at (x, y) in R = 32x, G = 32y, B = 128 |
+| `preferences.jsonl` | Host → Device: brightness 50, the Aggregate Layout, turned 180°, Disconnected after 10 s, Escalation at 20 s, 1 min, 5 min |
 
 A change to the protocol changes the fixtures in the same commit.

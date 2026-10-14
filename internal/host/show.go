@@ -98,8 +98,9 @@ func (s *Showing) framesFor(size matrixSize) []picture.Frame {
 func (h *Host) prepareShow(dev *devicelink.Device) {
 	h.mu.Lock()
 	s := h.showing
+	rotation := h.prefs.Rotation
 	h.unlock()
-	if size, ok := matrixOf(dev); s != nil && ok {
+	if size, ok := matrixOf(dev, rotation); s != nil && ok {
 		s.framesFor(size)
 	}
 }
@@ -111,19 +112,25 @@ func (h *Host) claimedMatrix() (matrixSize, bool) {
 	return h.matrix()
 }
 
-// matrix is the claimed Device's matrix size. Callers hold h.mu.
+// matrix is the claimed Device's matrix size as the picture is seen on it.
+// Callers hold h.mu.
 func (h *Host) matrix() (matrixSize, bool) {
 	if h.device == nil {
 		return matrixSize{}, false
 	}
-	return matrixOf(h.device)
+	return matrixOf(h.device, h.prefs.Rotation)
 }
 
-// matrixOf is a Device's matrix size, from its Hardware Profile.
-func matrixOf(dev *devicelink.Device) (matrixSize, bool) {
+// matrixOf is a Device's matrix size, from its Hardware Profile, as the
+// picture is seen on it: turned sideways by the rotation Preference, width
+// and height swap.
+func matrixOf(dev *devicelink.Device, rotation int) (matrixSize, bool) {
 	hp := dev.HelloReply.HardwareProfile
 	if hp.Width < 1 || hp.Height < 1 {
 		return matrixSize{}, false
+	}
+	if sideways(rotation) {
+		return matrixSize{hp.Height, hp.Width}, true
 	}
 	return matrixSize{hp.Width, hp.Height}, true
 }

@@ -72,6 +72,25 @@ type Acknowledge struct {
 	HostTime int64  `json:"host_time"`
 }
 
+// Preferences pushes the Preferences the Device renders by (Host → Device),
+// on claiming a Device and whenever they change. The Device caches them.
+type Preferences struct {
+	Type string `json:"type"`
+	// Theme is the Theme's name.
+	Theme string `json:"theme"`
+	// Brightness is a percentage (1-100) of the Hardware Profile's
+	// brightness cap.
+	Brightness int    `json:"brightness"`
+	Layout     string `json:"layout"`
+	// Rotation is 0, 90, 180 or 270 degrees clockwise.
+	Rotation              int   `json:"rotation"`
+	QuietMode             bool  `json:"quiet_mode"`
+	DisconnectedTimeoutMS int64 `json:"disconnected_timeout_ms"`
+	EscalationFasterMS    int64 `json:"escalation_faster_ms"`
+	EscalationTakeoverMS  int64 `json:"escalation_takeover_ms"`
+	EscalationSteadyMS    int64 `json:"escalation_steady_ms"`
+}
+
 // RawModeEnter puts the Device in Raw Mode: it shows the RawFrames that
 // follow instead of its own rendering, except while a session is Awaiting
 // Input.
@@ -127,6 +146,12 @@ func NewAcknowledge(id string, hostTime int64) Acknowledge {
 }
 
 func NewHeartbeat(hostTime int64) Heartbeat { return Heartbeat{Type: "heartbeat", HostTime: hostTime} }
+
+// NewPreferences fills in the message type of p.
+func NewPreferences(p Preferences) Preferences {
+	p.Type = "preferences"
+	return p
+}
 
 func NewRawModeEnter() RawModeEnter { return RawModeEnter{Type: "raw_mode_enter"} }
 

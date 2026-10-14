@@ -9,7 +9,10 @@
 // the Device's Acknowledge (the button of a real Device): the Virtual Device
 // sends it to the Host on stdout.
 //
-// Usage: virtual-device [--size WxH] [--layout adaptive|aggregate]
+// With --preferences-file the Virtual Device keeps its Preferences in that
+// file, as a Device keeps them in flash, and boots with them next time.
+//
+// Usage: virtual-device [--size WxH] [--layout adaptive|aggregate] [--preferences-file PATH]
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -154,7 +157,39 @@ bool parseSize(const char* text, device::HardwareProfile& profile) {
   return true;
 }
 
-// The Layout until Preferences carry it (#11).
+// The Preferences cache of a Device, in a file: one `preferences` line.
+class FilePreferencesCache : public device::PreferencesCache {
+ public:
+  explicit FilePreferencesCache(std::string path) : path_(std::move(path)) {}
+
+  std::string load() override {
+    std::ifstream in(path_, std::ios::binary);
+    std::string line;
+    std::getline(in, line);
+    return line;
+  }
+
+  // Written to a temporary file renamed over the old one, so a Virtual
+  // Device killed mid-write leaves the previous Preferences, never half.
+  void save(std::string_view line) override {
+    const std::string temporary = path_ + ".tmp";
+    {
+      std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+      out << line << '\n';
+      if (!out.flush()) {
+        std::fprintf(stderr, "virtual-device: can't save Preferences to %s\n", temporary.c_str());
+        return;
+      }
+    }
+    if (std::rename(temporary.c_str(), path_.c_str()) != 0)
+      std::fprintf(stderr, "virtual-device: can't save Preferences to %s\n", path_.c_str());
+  }
+
+ private:
+  std::string path_;
+};
+
+// The Layout the Virtual Device boots with, until a Preferences push.
 bool parseLayout(const char* text, device::Layout& layout) {
   if (std::strcmp(text, "adaptive") == 0) {
     layout = device::Layout::Adaptive;
@@ -170,20 +205,25 @@ bool parseLayout(const char* text, device::Layout& layout) {
 
 int main(int argc, char** argv) {
   device::HardwareProfile profile = referenceProfile();
-  device::Layout layout = device::Layout::Adaptive;
+  device::Preferences preferences;
+  std::unique_ptr<FilePreferencesCache> cache;
   for (int i = 1; i < argc; ++i) {
     if (std::strcmp(argv[i], "--size") == 0 && i + 1 < argc && parseSize(argv[i + 1], profile)) {
       ++i;
-    } else if (std::strcmp(argv[i], "--layout") == 0 && i + 1 < argc && parseLayout(argv[i + 1], layout)) {
+    } else if (std::strcmp(argv[i], "--layout") == 0 && i + 1 < argc && parseLayout(argv[i + 1], preferences.layout)) {
       ++i;
+    } else if (std::strcmp(argv[i], "--preferences-file") == 0 && i + 1 < argc && argv[i + 1][0] != '\0') {
+      cache = std::make_unique<FilePreferencesCache>(argv[++i]);
     } else {
-      std::fprintf(stderr, "usage: %s [--size WxH] [--layout adaptive|aggregate]   (W, H in 1..64)\n", argv[0]);
+      std::fprintf(stderr,
+                   "usage: %s [--size WxH] [--layout adaptive|aggregate] [--preferences-file PATH]   (W, H in 1..64)\n",
+                   argv[0]);
       return 2;
     }
   }
 
   SteadyClock clock;
-  device::DeviceCore core(profile, kFirmwareVersion, clock, device::Escalation{}, layout);
+  device::DeviceCore core(profile, kFirmwareVersion, clock, preferences, cache.get());
 
   device::PixelBuffer shown = core.render();
   draw(shown, "(start)");

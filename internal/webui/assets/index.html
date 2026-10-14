@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Codino</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<header>
+  <h1>codino</h1>
+  <p id="link" class="pill">connecting…</p>
+</header>
+
+<main>
+  <section class="device" aria-label="Live preview">
+    <div class="housing">
+      <canvas id="matrix" width="320" height="320" role="img" aria-label="The Device's LED matrix"></canvas>
+    </div>
+    <p id="device" class="caption"></p>
+
+    <h2>Preview a Session State</h2>
+    <p class="hint">Forces the Device and this preview into a state. Live returns them to your sessions.</p>
+    <div id="states" class="states">
+      <button type="button" data-state="" class="live" aria-pressed="true">Live</button>
+      <button type="button" data-state="idle">Idle</button>
+      <button type="button" data-state="working">Working</button>
+      <button type="button" data-state="awaiting_input">Awaiting Input</button>
+      <button type="button" data-state="awaiting_input" data-step="faster">… faster</button>
+      <button type="button" data-state="awaiting_input" data-step="takeover">… Takeover</button>
+      <button type="button" data-state="awaiting_input" data-step="steady">… steady glow</button>
+      <button type="button" data-state="done">Done</button>
+      <button type="button" data-state="error">Error</button>
+    </div>
+    <p id="sessions" class="caption"></p>
+  </section>
+
+  <section class="preferences" aria-label="Preferences">
+    <h2>Preferences</h2>
+    <p class="hint">Saved to <code id="config">your config file</code> as <code>codino set</code> does; the Device follows at once.</p>
+    <p id="problem" class="error" hidden></p>
+    <form id="form" autocomplete="off">
+      <label>Theme <select name="theme"></select></label>
+      <p id="theme-note" class="note" hidden></p>
+      <label>Brightness <span class="range"><input type="range" name="brightness" min="1" max="100"><output></output></span></label>
+      <fieldset>
+        <legend>Layout</legend>
+        <label class="choice"><input type="radio" name="layout" value="adaptive"> one Tile per session</label>
+        <label class="choice"><input type="radio" name="layout" value="aggregate"> Aggregate State only</label>
+      </fieldset>
+      <label>Rotation <select name="rotation"><option>0</option><option>90</option><option>180</option><option>270</option></select></label>
+      <label class="check"><input type="checkbox" name="quiet_mode"> Quiet Mode: nothing but Awaiting Input</label>
+      <label>Done decays after <input name="done_decay" placeholder="10m"></label>
+      <label>Disconnected after <input name="disconnected_timeout" placeholder="5s"></label>
+      <fieldset>
+        <legend>Escalation of Awaiting Input</legend>
+        <label>faster after <input name="escalation.faster" placeholder="30s"></label>
+        <label>Takeover after <input name="escalation.takeover" placeholder="2m"></label>
+        <label>steady glow after <input name="escalation.steady" placeholder="10m"></label>
+      </fieldset>
+      <fieldset id="pins" hidden>
+        <legend>Pinned Project Colors</legend>
+        <ul id="pin-list"></ul>
+        <p class="hint">Pin one with <code>codino set project_colors.PATH '#rrggbb'</code>.</p>
+      </fieldset>
+    </form>
+    <p id="saved" class="status" role="status" aria-live="polite"></p>
+  </section>
+</main>
+
+<div id="closed" class="closed" hidden>
+  <p>The web UI has closed.<br>Run <code>codino ui</code> to open it again.</p>
+</div>
+</body>
+</html>

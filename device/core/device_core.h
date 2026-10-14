@@ -1,7 +1,7 @@
 // Device core: protocol messages and clock ticks in, pixel buffer out.
 //
 // Portable C++17 with no Arduino or FastLED dependency, so the same code runs
-// in the firmware shell, the terminal Virtual Device and (later) the browser.
+// in the firmware shell, the terminal Virtual Device and the browser Virtual Device.
 #pragma once
 
 #include <cstdint>
@@ -197,6 +197,8 @@ class DeviceCore {
   void renderDisconnected();
   // Renders the picture into frame_ for the current clock time.
   void renderFrame();
+  // Renders sessions_: a Takeover, the Aggregate State or the Tiles.
+  void renderSessions();
 
   // Renders by `preferences` from now on, and caches them when they changed.
   void applyPreferences(const Preferences& preferences);
@@ -267,6 +269,11 @@ class DeviceCore {
   std::map<std::string, Session> sessions_;
   // Raw Mode: the Host's pixels, shown while no session is Awaiting Input.
   bool rawMode_ = false;
+  // Preview (the web UI's preview-state override): the matrix shows what it
+  // would with one session, the one in previewed_, in place of the sessions
+  // and Raw Mode. previewed_ is swapped into sessions_ to render.
+  bool preview_ = false;
+  std::map<std::string, Session> previewed_;
   PixelBuffer raw_;
   // The latest Host time heard (hello, heartbeat) and the clock time it was
   // heard at, to relate Host times to the clock.

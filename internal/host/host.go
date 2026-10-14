@@ -70,6 +70,17 @@ type Host struct {
 	showing    *Showing
 	shownFrame int
 
+	// preview is the web UI's preview-state override, if any.
+	preview *previewing
+	// holds counts the Holds keeping the Host from retiring.
+	holds int
+	// watchers see what the Device is sent (Watch).
+	watchers map[*Watcher]bool
+	// copies keeps copies of the installed Themes and Sprite Packs, which
+	// themeCopies holds in memory.
+	copies      ThemeCopies
+	themeCopies []protocol.Install
+
 	// installMu keeps installs one at a time: each waits for its reply.
 	installMu sync.Mutex
 	// onDevice is what the claimed Device has installed.
@@ -175,6 +186,9 @@ func New(clock Clock, devices devicelink.Discoverer, opts ...Option) *Host {
 	if h.prefsSource != nil {
 		h.reloadPreferences()
 	}
+	if h.copies != nil {
+		h.themeCopies = h.copies.Load()
+	}
 	return h
 }
 
@@ -229,10 +243,10 @@ func (h *Host) Apply(e Event) error {
 }
 
 // updateExitGrace starts the exit grace when the last session is gone and
-// stops it while there are any, or a picture is shown. Callers hold h.mu.
+// stops it while there are any, a picture is shown or a Hold is held.
+// Callers hold h.mu.
 func (h *Host) updateExitGrace(now time.Time) {
-	// A picture on show holds the Host Daemon too.
-	switch empty := len(h.sessions.sessions) == 0 && h.showing == nil; {
+	switch empty := len(h.sessions.sessions) == 0 && h.showing == nil && h.holds == 0; {
 	case !empty:
 		h.emptySince = time.Time{}
 	case h.emptySince.IsZero():
@@ -255,12 +269,17 @@ func (h *Host) Tick() {
 	for _, s := range h.sessions.decayDone(h.clock.Now(), h.prefs.DoneDecay) {
 		h.send(upsert(s))
 	}
-	if h.device != nil {
+	if h.listening() {
 		if now := h.clock.Now(); now.Sub(h.lastHeartbeat) >= HeartbeatInterval {
 			silent := now.Sub(h.lastHeartbeat) >= h.prefs.DisconnectedTimeout
 			h.send(protocol.NewHeartbeat(now.UnixMilli()))
 			h.lastHeartbeat = now
 			h.refreshShow(silent)
+			if silent {
+				// The Device took the silence for Disconnected, which ended
+				// the preview.
+				h.sendPreview()
+			}
 		}
 		h.sendShowFrame()
 	}
@@ -379,15 +398,39 @@ func (h *Host) claim() {
 	h.deviceProblem = ""
 	h.lastFailedClaim = time.Time{}
 	h.lastHeartbeat = now // hello counts as one
-	h.send(preferencesPush(h.prefs))
+	msgs, frame := h.greeting()
+	for _, msg := range msgs {
+		h.sendDevice(msg)
+	}
+	h.shownFrame = frame
+	for w := range h.watchers {
+		h.startWatcher(w, now)
+	}
+	go h.listen(dev)
+}
+
+// greeting is what a Device claimed now hears after hello: the Preferences,
+// every session (with its Acknowledge, for one Awaiting Input), the show's
+// Raw Mode and its current frame, and the preview. frame is the index of the
+// show's frame in it, -1 for none. Callers hold h.mu.
+func (h *Host) greeting() (msgs []any, frame int) {
+	msgs = append(msgs, preferencesPush(h.prefs))
 	for _, s := range h.sessions.ordered() {
-		h.send(upsert(s))
+		msgs = append(msgs, upsert(s))
 		if s.state == AwaitingInput && !s.acknowledged.IsZero() {
-			h.send(acknowledge(s))
+			msgs = append(msgs, acknowledge(s))
 		}
 	}
-	h.enterRawMode()
-	go h.listen(dev)
+	frame = -1
+	if size, ok := h.matrix(); h.showing != nil && ok {
+		frames := h.showing.framesFor(size)
+		frame = frameAt(frames, h.clock.Now().Sub(h.showing.start))
+		msgs = append(msgs, protocol.NewRawModeEnter(), protocol.NewRawFrame(frames[frame].RGB))
+	}
+	if h.preview != nil {
+		msgs = append(msgs, h.previewEnter())
+	}
+	return msgs, frame
 }
 
 // listen applies what the human does on the Device until it is gone.
@@ -419,9 +462,23 @@ func (h *Host) acknowledgeAll() {
 // HeartbeatInterval is how often the Host tells a claimed Device it is alive.
 const HeartbeatInterval = time.Second
 
-// send writes to the claimed Device, if any. A failed write drops the Device;
-// the next Tick claims one again. Callers hold h.mu.
+// send writes to the claimed Device, if any, and to every Watcher. Callers
+// hold h.mu.
 func (h *Host) send(msg any) {
+	if len(h.watchers) > 0 {
+		line, err := protocol.Encode(msg)
+		if err != nil {
+			slog.Warn("encode for the Watchers", "err", err)
+		} else {
+			h.mirrorLine(line)
+		}
+	}
+	h.sendDevice(msg)
+}
+
+// sendDevice writes to the claimed Device, if any. A failed write drops the
+// Device; the next Tick claims one again. Callers hold h.mu.
+func (h *Host) sendDevice(msg any) {
 	if h.device == nil {
 		return
 	}
@@ -430,6 +487,10 @@ func (h *Host) send(msg any) {
 		h.drop()
 	}
 }
+
+// listening reports whether anything hears what the Host sends: a claimed
+// Device or a Watcher. Callers hold h.mu.
+func (h *Host) listening() bool { return h.device != nil || len(h.watchers) > 0 }
 
 // dropGoneDevice forgets a Device that was unplugged. Callers hold h.mu.
 func (h *Host) dropGoneDevice() {
@@ -481,5 +542,8 @@ func (h *Host) Close() {
 	}
 	if h.device != nil {
 		h.drop()
+	}
+	for w := range h.watchers {
+		h.dropWatcher(w)
 	}
 }

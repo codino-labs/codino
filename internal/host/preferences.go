@@ -8,6 +8,14 @@ import (
 	"github.com/codino-labs/codino/internal/protocol"
 )
 
+// ReloadPreferences reads the config file now rather than at the next poll:
+// the web UI changed it.
+func (h *Host) ReloadPreferences() {
+	if h.prefsSource != nil {
+		h.reloadPreferences()
+	}
+}
+
 // reloadPreferences reads the config file (file I/O: outside h.mu) and
 // applies what changed. An invalid file is reported, once per problem, and
 // ignored: the Host keeps the Preferences it has.

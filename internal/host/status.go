@@ -11,6 +11,9 @@ type Status struct {
 	Showing bool `json:"showing"`
 	// Theme is the theme Preference in force.
 	Theme string `json:"theme"`
+	// Preview is the Session State the web UI forces the Device into, if
+	// any (Preview).
+	Preview SessionState `json:"preview,omitempty"`
 	// PreferencesProblem is why the config file is ignored (it is invalid);
 	// empty when its Preferences are in force.
 	PreferencesProblem string `json:"preferences_problem,omitempty"`
@@ -52,6 +55,9 @@ func (h *Host) Status() Status {
 	h.dropGoneDevice()
 	st := Status{AggregateState: h.sessions.aggregateState(), Sessions: []SessionSummary{}, Showing: h.showing != nil,
 		PreferencesProblem: h.prefsProblem, Theme: h.prefs.Theme}
+	if h.preview != nil {
+		st.Preview = h.preview.state
+	}
 	for _, s := range h.sessions.ordered() {
 		st.Sessions = append(st.Sessions, SessionSummary{
 			ID: s.id, State: s.state, StateEntered: s.stateEntered,

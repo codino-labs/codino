@@ -1,8 +1,8 @@
 ---
 name: codino
-description: Show or change the Codino Preferences (Theme, brightness, Layout, rotation, Quiet Mode, Done decay, Escalation thresholds, Disconnected timeout, pinned Project Colors) through `codino get/set/unset`. Use when the user asks to change how their Codino LED matrix looks or behaves.
-argument-hint: "[KEY [VALUE]] | unset KEY | what you want changed"
-allowed-tools: Bash(codino get:*), Bash(codino set:*), Bash(codino unset:*), Bash(codino theme list:*)
+description: Show or change the Codino Preferences (Theme, brightness, Layout, rotation, Quiet Mode, Done decay, Escalation thresholds, Disconnected timeout, pinned Project Colors) through `codino get/set/unset`, or open the Codino web UI with a live preview (`/codino ui`). Use when the user asks to change how their Codino LED matrix looks or behaves, or to see or preview it.
+argument-hint: "ui | [KEY [VALUE]] | unset KEY | what you want changed"
+allowed-tools: Bash(codino get:*), Bash(codino set:*), Bash(codino unset:*), Bash(codino theme list:*), Bash(codino ui:*)
 ---
 
 # Codino Preferences
@@ -15,6 +15,7 @@ The current Preferences:
 
 Arguments: `$ARGUMENTS`
 
+- `ui` (or "open the web UI", "show me a preview", "let me try Themes"): run `codino ui`. It opens the web UI in the user's browser and returns at once: a live preview of the Device where they edit the Preferences, browse the Themes and preview each Session State. Relay its output; if it printed a link instead (no browser could be opened), give the user that link, which works once. The UI closes when they close the page.
 - No arguments: show the Preferences above as a short table, and say how to change one (`/codino KEY VALUE`).
 - `KEY`: run `codino get KEY` and show the value.
 - `KEY VALUE`: run `codino set KEY VALUE`.

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"slices"
 
 	"github.com/codino-labs/codino/internal/devicelink"
 	"github.com/codino-labs/codino/internal/protocol"
@@ -57,6 +59,9 @@ func (h *Host) askDevice(ctx context.Context, msg any, kind protocol.Kind, name 
 			}
 			h.unlock()
 			if reply.Kind == kind && reply.Name == name {
+				if reply.OK {
+					h.keepCopy(msg, kind, name)
+				}
 				return reply, nil
 			}
 		case <-dev.Gone():
@@ -75,4 +80,29 @@ type installedOn struct {
 
 func installedOnDevice(dev *devicelink.Device) installedOn {
 	return installedOn{themes: dev.HelloReply.Themes, spritePacks: dev.HelloReply.SpritePacks}
+}
+
+// keepCopy keeps a copy of what the Device just installed, or forgets the
+// copy of what it uninstalled, for the web UI's preview. The I/O runs
+// without h.mu.
+func (h *Host) keepCopy(msg any, kind protocol.Kind, name string) {
+	if h.copies == nil {
+		return
+	}
+	install, installed := msg.(protocol.Install)
+	var err error
+	if installed {
+		err = h.copies.Save(install)
+	} else {
+		err = h.copies.Remove(kind, name)
+	}
+	if err != nil {
+		slog.Warn("keep a copy of a Theme or Sprite Pack for the preview", "kind", kind, "name", name, "err", err)
+	}
+	h.mu.Lock()
+	defer h.unlock()
+	h.themeCopies = slices.DeleteFunc(h.themeCopies, func(i protocol.Install) bool { return i.Kind == kind && i.Name == name })
+	if installed {
+		h.themeCopies = append(h.themeCopies, install)
+	}
 }

@@ -9,6 +9,7 @@
 //	codino set KEY VALUE
 //	codino unset KEY
 //	codino status [--json]
+//	codino ui [--no-browser]
 //	codino theme list
 //	codino theme install FILE
 //	codino theme uninstall [--sprite-pack] NAME
@@ -38,6 +39,7 @@ import (
 	"github.com/codino-labs/codino/internal/host"
 	"github.com/codino-labs/codino/internal/liveness"
 	"github.com/codino-labs/codino/internal/picture"
+	"github.com/codino-labs/codino/internal/webui"
 )
 
 // name is the product name, kept here so internal packages don't carry it.
@@ -60,6 +62,7 @@ const usage = `usage:
   codino set KEY VALUE
   codino unset KEY
   codino status [--json]
+  codino ui [--no-browser]
   codino theme list
   codino theme install FILE
   codino theme uninstall [--sprite-pack] NAME
@@ -88,6 +91,9 @@ second. get with no KEY lists every Preference. Keys:
   escalation.steady     e.g. 10m: Escalation settles into a steady glow
   project_colors.PATH   #rrggbb pinned to the git repo PATH is in (PATH may be .)
 unset returns a Preference to its default.
+ui: opens the web UI in the browser: edit the Preferences, browse the Themes
+and force each Session State on a live preview of the Device. It is served
+on 127.0.0.1 by the Host Daemon while the page is open.
 theme: lists the Themes and Sprite Packs the Device has, installs a Theme or
 Sprite Pack file on it (kept in its flash; see protocol/themes.md), or removes
 one.
@@ -119,6 +125,8 @@ func main() {
 		err = status(paths, args, os.Stdout)
 	case "theme":
 		err = theme(paths, args, os.Stdout)
+	case "ui":
+		err = ui(paths, args, os.Stdout)
 	case "daemon":
 		err = runDaemon(paths, args)
 	case "-h", "--help", "help":
@@ -275,6 +283,9 @@ func printStatus(out io.Writer, st host.Status, now time.Time) {
 	if st.Showing {
 		fmt.Fprintln(out, "Raw Mode: showing a picture (codino show)")
 	}
+	if st.Preview != "" {
+		fmt.Fprintf(out, "Preview: the web UI forces %s (codino ui)\n", st.Preview)
+	}
 	fmt.Fprintf(out, "Aggregate State: %s\n", st.AggregateState)
 	if len(st.Sessions) == 0 {
 		fmt.Fprintln(out, "No Agent Sessions.")
@@ -339,16 +350,22 @@ func runDaemon(paths daemon.Paths, args []string) error {
 	if err != nil {
 		return err
 	}
+	copies, err := newThemeCopies()
+	if err != nil {
+		return err
+	}
 	h := host.New(systemClock{}, devices, host.WithExitGrace(exitGrace), host.WithPreferences(prefsFile),
 		host.WithTranscriptProbe(claudecode.Transcripts{}), host.WithLivenessProbe(liveness.Probe{}),
-		host.WithProjectRoots(gitrepo.Roots{}))
+		host.WithProjectRoots(gitrepo.Roots{}), host.WithThemeCopies(copies))
 	defer h.Close()
+	webUI := &webui.Launcher{Host: h, Preferences: prefsFile, ConfigFile: prefsFile.Path, Clock: systemClock{}}
+	defer webUI.Close() // before h.Close: it ends the preview
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	slog.Info("Host Daemon listening", "socket", paths.Socket, "virtual_device", *virtual, "exit_grace", exitGrace,
 		"preferences", prefsFile.Path)
-	if err := daemon.Run(ctx, ln, h); err != nil {
+	if err := daemon.Run(ctx, ln, h, daemon.WithUI(webUI)); err != nil {
 		return err
 	}
 	select {

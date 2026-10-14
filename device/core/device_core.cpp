@@ -215,6 +215,7 @@ std::string DeviceCore::receive(std::string_view line) {
     // from an earlier Host Daemon must not linger, nor its Raw Mode.
     sessions_.clear();
     rawMode_ = false;
+    preview_ = false;
     noteHostTime();
     hostMessage();
     return helloReply();
@@ -255,6 +256,20 @@ std::string DeviceCore::receive(std::string_view line) {
     raw_.fill(Rgb{});
   } else if (type == "raw_mode_exit") {
     rawMode_ = false;
+  } else if (type == "preview_enter") {
+    const SessionStateInfo* state = findByWireName(message["state"] | "");
+    JsonVariantConst elapsed = message["elapsed_ms"];
+    if (state == nullptr || (!elapsed.isNull() && !elapsed.is<uint32_t>())) return {};
+    // A lone session that entered the state elapsed_ms ago, in the Session
+    // State's own color.
+    Session previewed;
+    previewed.state = state->state;
+    previewed.escalationStart = clock_.millis() - (elapsed | uint32_t{0});
+    previewed_.clear();
+    previewed_.emplace("preview", previewed);
+    preview_ = true;
+  } else if (type == "preview_exit") {
+    preview_ = false;
   } else if (type == "install") {
     hostMessage();
     return install(message.as<JsonVariantConst>());
@@ -350,9 +365,11 @@ SessionState DeviceCore::aggregateState() const {
 // Unsigned subtraction keeps working when millis() wraps (every ~49.7 days).
 bool DeviceCore::disconnected() {
   if (clock_.millis() - lastHostMessage_ >= preferences_.disconnectedTimeoutMs) {
-    // The Host that streamed the pixels is gone: Raw Mode ends with it.
+    // The Host that streamed the pixels, or asked for a preview, is gone:
+    // Raw Mode and the preview end with it.
     disconnected_ = true;
     rawMode_ = false;
+    preview_ = false;
   }
   return disconnected_;
 }
@@ -525,13 +542,19 @@ Rgb DeviceCore::colorOf(const Session& session) const {
   return session.hasProjectColor ? session.projectColor : theme_[session.state].palette[0];
 }
 
-// A Takeover of any session takes the whole matrix whatever the Layout,
-// cycling between the Project Colors of every session in Takeover. Otherwise
-// one session, or the Aggregate Layout, shows the Aggregate State on the
-// whole matrix, and several sessions get Tiles.
+// Disconnected wins over everything; then a preview, which shows its lone
+// session in place of the Device's sessions and Raw Mode; then Raw Mode,
+// unless a session is Awaiting Input; then the sessions.
 void DeviceCore::renderFrame() {
   if (disconnected()) {
     renderDisconnected();
+    return;
+  }
+  if (preview_) {
+    // O(1) swaps: no allocation per frame.
+    sessions_.swap(previewed_);
+    renderSessions();
+    sessions_.swap(previewed_);
     return;
   }
   // Awaiting Input always pre-empts Raw Mode (ADR-0001).
@@ -542,6 +565,14 @@ void DeviceCore::renderFrame() {
     frame_ = raw_;
     return;
   }
+  renderSessions();
+}
+
+// A Takeover of any session takes the whole matrix whatever the Layout,
+// cycling between the Project Colors of every session in Takeover. Otherwise
+// one session, or the Aggregate Layout, shows the Aggregate State on the
+// whole matrix, and several sessions get Tiles.
+void DeviceCore::renderSessions() {
   if (sessions_.empty()) {
     frame_.fill(Rgb{});
     return;

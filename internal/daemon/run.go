@@ -18,7 +18,7 @@ const showTickInterval = 10 * time.Millisecond
 
 // Run is the Host Daemon: it ticks h and serves clients on ln until ctx is
 // done or h retires.
-func Run(ctx context.Context, ln net.Listener, h *host.Host) error {
+func Run(ctx context.Context, ln net.Listener, h *host.Host, opts ...Option) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {
@@ -44,7 +44,7 @@ func Run(ctx context.Context, ln net.Listener, h *host.Host) error {
 			}
 		}
 	}()
-	err := Serve(ctx, ln, h)
+	err := Serve(ctx, ln, h, opts...)
 	cancel()
 	<-ticking
 	return err

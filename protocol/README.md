@@ -2,7 +2,7 @@
 
 The wire protocol between the Host Daemon and a Device (or a Virtual Device). It is semantic (ADR-0001): the Host says what state each Agent Session is in, and the Device decides how that looks.
 
-v0 covers the handshake, session upsert, session remove, heartbeat, acknowledge, Disconnected, Raw Mode, the Preferences push and installing Themes and Sprite Packs. Later kinds from the v1 spec (preview-state override) will be added here with their own fixtures. The Theme and Sprite Pack format is in [themes.md](themes.md).
+v0 covers the handshake, session upsert, session remove, heartbeat, acknowledge, Disconnected, Raw Mode, the preview-state override, the Preferences push and installing Themes and Sprite Packs. The Theme and Sprite Pack format is in [themes.md](themes.md).
 
 ## Framing
 
@@ -110,12 +110,12 @@ Done decay is the Host's: the Session Tracker returns a session that stayed Done
 
 ## Disconnected
 
-Every message the Device can use (`hello`, `heartbeat`, a valid `session_upsert`, `session_remove`, `acknowledge` or `preferences`, `raw_mode_enter`, `raw_mode_exit`, a Raw Mode frame it shows, an `install` or `uninstall` it answers) tells it the Host is alive; lines it ignores don't. When nothing usable has arrived for the Disconnected timeout, the Device shows Disconnected. It counts from boot too, so a Device that never heard from a Host shows it as well.
+Every message the Device can use (`hello`, `heartbeat`, a valid `session_upsert`, `session_remove`, `acknowledge` or `preferences`, `raw_mode_enter`, `raw_mode_exit`, a Raw Mode frame it shows, a valid `preview_enter`, `preview_exit`, an `install` or `uninstall` it answers) tells it the Host is alive; lines it ignores don't. When nothing usable has arrived for the Disconnected timeout, the Device shows Disconnected. It counts from boot too, so a Device that never heard from a Host shows it as well.
 
 - The timeout is a Preference (`disconnected_timeout_ms`, 5 seconds by default), which a Device boots with from its cache, so it applies before any Host connects.
 - Disconnected is not a Session State. It hides the sessions, because the Device no longer knows their state, and it never looks like Idle: v0 draws a dim diagonal line on a dark matrix. It shows in Quiet Mode too.
 - The next usable message ends it. A heartbeat brings back the sessions the Device holds; a `hello` replaces them.
-- Disconnected ends Raw Mode (above).
+- Disconnected ends Raw Mode (above) and the preview (below).
 - A Host Daemon that exits stops the heartbeats too, so the Device shows Disconnected until the next Host Daemon says `hello`.
 
 ## Raw Mode (Host → Device)
@@ -163,6 +163,31 @@ Size: a 16×16 matrix makes 770-byte lines (8×8: 194), so a Device's line buffe
 4. On Ctrl-C (or SIGTERM, or the command's connection to the daemon closing for any reason): `raw_mode_exit`. A newer `codino show` replaces the picture (a new `raw_mode_enter` and frame) and ends the older command.
 
 A show keeps the Host Daemon from retiring, as sessions do.
+
+## Preview (Host → Device)
+
+The web UI (`codino ui`) lets the human see what each Session State looks like without waiting for an Agent: it forces the Device, and the UI's in-browser Virtual Device, into one state, then restores them.
+
+### `preview_enter`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `state` | string | The Session State to show. |
+| `elapsed_ms` | integer ≥ 0 | How long the previewed session has been in it: for Awaiting Input, which Escalation step shows (e.g. the `escalation_takeover_ms` Preference for the Takeover). |
+
+The Device shows what it would with a lone session in `state` that entered it `elapsed_ms` ago, without a Project Color (so in the Session State's own color, a Takeover included), animated and escalating from there by its clock: the Theme, brightness, rotation and Quiet Mode apply as usual. The preview shows in place of every session the Device holds and of Raw Mode; the Device keeps them meanwhile (upserts, removes, Acknowledges and frames still apply) and shows them again once the preview ends. A new `preview_enter` replaces the preview.
+
+A v0 Device needs a valid `state`; without `elapsed_ms` the session has just entered it, and an `elapsed_ms` that is present but not an integer from 0 to 2³²−1 makes the message ignored.
+
+### `preview_exit`
+
+No other field. The Device returns to its sessions (or Raw Mode). Ignored without a preview.
+
+### Rules
+
+- **The Host gone.** Disconnected and `hello` end the preview, as they end Raw Mode. The Host sends `preview_enter` again, its `elapsed_ms` grown by the time passed, after the `session_upsert`s (and Raw Mode) of a new handshake, and after a silence the Device took for Disconnected.
+- **Bounded.** The Host ends the preview (`preview_exit`) when the web UI closes, so a preview never outlives the page that asked for it.
+- `preview_enter` and `preview_exit` tell the Device the Host is alive (Disconnected, above).
 
 ## Layout and Tiles
 
@@ -256,5 +281,7 @@ The Device answers every `install` and `uninstall` with one, which also counts a
 | `install-theme.jsonl` | Host → Device: the Theme `ember`, with every effect but `pulse` and a pose of `dots` for Done |
 | `install-reply.jsonl` | Device → Host: the reply to `install-theme.jsonl` on the reference build that has `dots` |
 | `uninstall.jsonl` | Host → Device: uninstall the Theme `ember` |
+| `preview-enter.jsonl` | Host → Device: preview Awaiting Input 2 min 30 s in, a Takeover by the default Escalation |
+| `preview-exit.jsonl` | Host → Device |
 
 A change to the protocol changes the fixtures in the same commit.

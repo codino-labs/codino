@@ -84,8 +84,31 @@ func (l *Listener) Unlock() {
 	l.lock.Close()
 }
 
+// UI is the web UI a Host Daemon serves (webui.Launcher).
+type UI interface {
+	// Open starts the web UI unless it runs and returns the URL that opens
+	// its page once. It fails with host.ErrRetired once the Host retired.
+	Open() (string, error)
+}
+
+// Option configures Serve and Run.
+type Option func(*options)
+
+type options struct {
+	ui UI
+}
+
+// WithUI serves OpUI with ui. Without it the daemon refuses OpUI.
+func WithUI(ui UI) Option {
+	return func(o *options) { o.ui = ui }
+}
+
 // Serve answers requests on ln with h until ctx is done or ln fails.
-func Serve(ctx context.Context, ln net.Listener, h *host.Host) error {
+func Serve(ctx context.Context, ln net.Listener, h *host.Host, opts ...Option) error {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
 	stop := context.AfterFunc(ctx, func() { ln.Close() })
 	defer stop()
 	var wg sync.WaitGroup
@@ -98,14 +121,14 @@ func Serve(ctx context.Context, ln net.Listener, h *host.Host) error {
 			}
 			return fmt.Errorf("accept: %w", err)
 		}
-		wg.Go(func() { serveConn(ctx, conn, h) })
+		wg.Go(func() { serveConn(ctx, conn, h, o) })
 	}
 }
 
 // maxRequest bounds one request line: a base64 picture and some room.
 const maxRequest = MaxPicture*4/3 + 4096
 
-func serveConn(ctx context.Context, conn net.Conn, h *host.Host) {
+func serveConn(ctx context.Context, conn net.Conn, h *host.Host, o options) {
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(requestTimeout))
 	var req Request
@@ -124,9 +147,12 @@ func serveConn(ctx context.Context, conn net.Conn, h *host.Host) {
 		return
 	}
 	var resp Response
-	if err != nil {
+	switch {
+	case err != nil:
 		resp.Error = fmt.Sprintf("bad request: %v", err)
-	} else {
+	case req.Op == OpUI:
+		resp = serveUI(o.ui)
+	default:
 		resp = handle(req, h)
 	}
 	reply(conn, resp)
@@ -203,6 +229,20 @@ func serveInstall(ctx context.Context, req Request, h *host.Host) Response {
 		return Response{Error: err.Error()}
 	}
 	return Response{InstallReply: &reply}
+}
+
+func serveUI(ui UI) Response {
+	if ui == nil {
+		return Response{Error: "this Host Daemon has no web UI"}
+	}
+	url, err := ui.Open()
+	if errors.Is(err, host.ErrRetired) {
+		return Response{Retiring: true}
+	}
+	if err != nil {
+		return Response{Error: err.Error()}
+	}
+	return Response{URL: url}
 }
 
 func handle(req Request, h *host.Host) Response {

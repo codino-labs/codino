@@ -107,6 +107,21 @@ type RawModeExit struct {
 	Type string `json:"type"`
 }
 
+// PreviewEnter forces the Device into a Session State for the web UI's
+// preview (Host → Device): it shows what it would with a lone session that
+// entered State ElapsedMS ago, in place of its sessions and Raw Mode, until
+// PreviewExit.
+type PreviewEnter struct {
+	Type      string `json:"type"`
+	State     string `json:"state"`
+	ElapsedMS int64  `json:"elapsed_ms"`
+}
+
+// PreviewExit returns the Device to its sessions (or Raw Mode).
+type PreviewExit struct {
+	Type string `json:"type"`
+}
+
 // RawFrameStart is the first byte of a RawFrame: never valid UTF-8, so no
 // JSON line starts with it.
 const RawFrameStart = 0xFF
@@ -160,6 +175,12 @@ func NewPreferences(p Preferences) Preferences {
 func NewRawModeEnter() RawModeEnter { return RawModeEnter{Type: "raw_mode_enter"} }
 
 func NewRawModeExit() RawModeExit { return RawModeExit{Type: "raw_mode_exit"} }
+
+func NewPreviewEnter(state string, elapsedMS int64) PreviewEnter {
+	return PreviewEnter{Type: "preview_enter", State: state, ElapsedMS: elapsedMS}
+}
+
+func NewPreviewExit() PreviewExit { return PreviewExit{Type: "preview_exit"} }
 
 // Encode renders a message as one protocol line, newline included.
 func Encode(msg any) ([]byte, error) {

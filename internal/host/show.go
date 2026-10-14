@@ -131,7 +131,10 @@ func (h *Host) claimedMatrix() (matrixSize, bool) {
 // Callers hold h.mu.
 func (h *Host) matrix() (matrixSize, bool) {
 	if h.device == nil {
-		return matrixSize{}, false
+		if len(h.watchers) == 0 {
+			return matrixSize{}, false
+		}
+		return matrixOfProfile(PreviewProfile, h.prefs.Rotation)
 	}
 	return matrixOf(h.device, h.prefs.Rotation)
 }
@@ -140,7 +143,10 @@ func (h *Host) matrix() (matrixSize, bool) {
 // picture is seen on it: turned sideways by the rotation Preference, width
 // and height swap.
 func matrixOf(dev *devicelink.Device, rotation int) (matrixSize, bool) {
-	hp := dev.HelloReply.HardwareProfile
+	return matrixOfProfile(dev.HelloReply.HardwareProfile, rotation)
+}
+
+func matrixOfProfile(hp protocol.HardwareProfile, rotation int) (matrixSize, bool) {
 	if hp.Width < 1 || hp.Height < 1 {
 		return matrixSize{}, false
 	}
@@ -153,7 +159,7 @@ func matrixOf(dev *devicelink.Device, rotation int) (matrixSize, bool) {
 // enterRawMode puts the claimed Device in Raw Mode with the current frame of
 // the show. Callers hold h.mu.
 func (h *Host) enterRawMode() {
-	if h.showing == nil || h.device == nil {
+	if h.showing == nil || !h.listening() {
 		return
 	}
 	h.send(protocol.NewRawModeEnter())

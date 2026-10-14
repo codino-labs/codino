@@ -105,6 +105,19 @@ func (c Client) askDevice(ctx context.Context, req Request) (protocol.InstallRep
 	return *resp.InstallReply, nil
 }
 
+// OpenUI starts the web UI, spawning the Host Daemon when it isn't running
+// (the UI then keeps it up), and returns the URL that opens its page once.
+func (c Client) OpenUI(ctx context.Context) (string, error) {
+	resp, err := c.call(ctx, Request{Op: OpUI}, c.Spawn)
+	if err != nil {
+		return "", err
+	}
+	if resp.URL == "" {
+		return "", errors.New("ui: empty reply")
+	}
+	return resp.URL, nil
+}
+
 // ErrNotRunning means no Host Daemon answered and none was spawned.
 var ErrNotRunning = errors.New("the Host Daemon is not running")
 

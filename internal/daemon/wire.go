@@ -21,6 +21,9 @@ const (
 	// carries the Device's InstallReply.
 	OpInstall   Op = "install"
 	OpUninstall Op = "uninstall"
+	// OpUI opens the web UI (starting it unless it runs): the reply
+	// carries the URL that opens its page, once.
+	OpUI Op = "ui"
 )
 
 // MaxPicture bounds the encoded picture an OpShow request carries.
@@ -53,4 +56,6 @@ type Response struct {
 	// NoDevice means OpInstall or OpUninstall found no Device claimed.
 	NoDevice     bool                   `json:"no_device,omitempty"`
 	InstallReply *protocol.InstallReply `json:"install_reply,omitempty"`
+	// URL opens the web UI's page, for OpUI.
+	URL string `json:"url,omitempty"`
 }

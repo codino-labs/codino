@@ -1609,3 +1609,105 @@ TEST_CASE("a cache without valid Preferences boots with the defaults") {
     CHECK(cache.saves == 0);
   }
 }
+
+// --- Preview (the web UI's preview-state override) --------------------------
+
+namespace {
+
+std::string previewEnter(const std::string& state, uint32_t elapsedMs = 0) {
+  return R"({"type":"preview_enter","state":")" + state + R"(","elapsed_ms":)" + std::to_string(elapsedMs) + "}";
+}
+
+constexpr device::Rgb kAwaitingInputOrange{0xff, 0x96, 0x00};
+
+}  // namespace
+
+TEST_CASE("a preview shows the matrix of a lone session in that Session State, whatever sessions the Device holds") {
+  for (const char* state : kStatesByUrgency) {
+    CAPTURE(state);
+    FakeClock clock;
+    device::DeviceCore core(profile8x8(), "0.1.0", clock, abstractTheme());
+    core.receive(upsertTile("a", "error", "#2ad14f", 0));
+    core.receive(upsertTile("b", "done", "#ff3da5", 1));
+
+    CHECK(core.receive(previewEnter(state)).empty());
+
+    CHECK(core.render() == loneSessionFrame(state));
+  }
+}
+
+TEST_CASE_FIXTURE(Device8x8, "preview_exit brings back the Device's sessions") {
+  core.receive(upsert("s1", "working"));
+  core.receive(previewEnter("error"));
+
+  CHECK(core.receive(fixture("preview-exit.jsonl")).empty());
+
+  CHECK(core.render() == loneSessionFrame("working"));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "a preview of Awaiting Input shows the Escalation step its elapsed time has reached") {
+  core.receive(previewEnter("awaiting_input", 40 * kSecond));
+  CHECK(core.render() == awaitingInputFor(40 * kSecond));
+
+  advanceWithHeartbeats(core, clock, 700);
+  CHECK(core.render() == awaitingInputFor(40 * kSecond + 700));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "the preview fixture shows a Takeover in the Session State's own color") {
+  core.receive(upsert("s1", "idle"));
+
+  core.receive(fixture("preview-enter.jsonl"));
+
+  CHECK(isFilled(core.render(), {0, 0, 8, 8}, kAwaitingInputOrange));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "a preview shows over Raw Mode, and the Host's pixels come back after") {
+  core.receive(fixture("raw-mode-enter.jsonl"));
+  core.receive(fixture("raw-frame.bin"));
+
+  core.receive(previewEnter("done"));
+  CHECK(core.render() == loneSessionFrame("done"));
+
+  core.receive(fixture("preview-exit.jsonl"));
+  CHECK(showsRawFixture(core.render()));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "a Host gone silent ends the preview: Disconnected, then the Device's own rendering") {
+  core.receive(upsert("s1", "working"));
+  core.receive(previewEnter("error"));
+
+  clock.advance(kTimeout);
+  CHECK(core.render() == disconnectedFrame({"working"}));
+
+  core.receive(heartbeat(clock));
+  CHECK(core.render() == loneSessionFrame("working"));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "a hello ends the preview") {
+  core.receive(previewEnter("error"));
+
+  core.receive(fixture("hello.jsonl"));
+  core.receive(upsert("s1", "working"));
+
+  CHECK(core.render() == loneSessionFrame("working"));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "preview messages keep the Device connected") {
+  for (int i = 0; i < 10; ++i) {
+    clock.advance(kSecond);
+    core.receive(previewEnter("done"));
+  }
+
+  CHECK(core.render() == loneSessionFrame("done"));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "a preview the Device cannot use is ignored") {
+  core.receive(upsert("s1", "working"));
+  for (const char* line : {R"({"type":"preview_enter"})", R"({"type":"preview_enter","state":"asleep"})",
+                           R"({"type":"preview_enter","state":"done","elapsed_ms":-1})",
+                           R"({"type":"preview_enter","state":"done","elapsed_ms":"soon"})"}) {
+    CAPTURE(line);
+    CHECK(core.receive(line).empty());
+    CHECK(core.render() == loneSessionFrame("working"));
+  }
+}

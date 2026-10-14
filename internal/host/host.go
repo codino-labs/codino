@@ -446,13 +446,20 @@ func (h *Host) listen(dev *devicelink.Device) {
 
 // acknowledgeAll applies an Acknowledge on the Device: every Done session is
 // cleared and every Escalation restarts. The Device restarted Escalation
-// itself, so only the Session State changes go back to it.
+// itself, so only the Session State changes go back to it. The Acknowledge
+// is the newest event of each session it cleared, so a slow hook stamped
+// before it, arriving later, is dropped rather than setting it back to Done.
+// A waiting session's events stay as they were: an interrupt shortly before
+// the Acknowledge must still return it to Idle.
 func (h *Host) acknowledgeAll() {
 	h.mu.Lock()
 	defer h.unlock()
 	now := h.clock.Now()
 	for _, s := range h.sessions.ordered() {
 		if s.acknowledge(now) {
+			if now.After(s.lastEventAt) {
+				s.lastEventAt = now
+			}
 			h.send(upsert(s))
 		}
 	}

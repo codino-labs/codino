@@ -232,3 +232,54 @@ func TestAnAcknowledgeOnTheDeviceClearsEveryDoneSessionAndRestartsEveryEscalatio
 		`{"type":"session_upsert","id":"d","state":"working","project_color":"#3a86ff","state_entered":1760432400000,"tile":3}`,
 	})
 }
+
+func TestALateHookStampedBeforeAnAcknowledgeOnTheDeviceIsDropped(t *testing.T) {
+	// A slow async hook (a second Stop of the turn the human just saw) was
+	// stamped before the Acknowledge but reaches the Host after it: it must
+	// not set the session back to Done.
+	clock := clockAt(1760432400000)
+	dev := newReferenceDevice(t)
+	h := host.New(clock, devices(dev))
+	defer h.Close()
+	h.Tick()
+	apply(t, h, host.Event{SessionID: "a", State: host.Done})
+	clock.Advance(time.Minute)
+	stamped := clock.Now().Add(-500 * time.Millisecond)
+
+	acknowledgeOnDevice(t, dev, 1)
+	apply(t, h, host.Event{SessionID: "a", State: host.Done, At: stamped})
+
+	assertStates(t, sessionStates(t, dev.Received()), "done", "idle")
+	if got := h.Status().Sessions[0].State; got != host.Idle {
+		t.Fatalf("session is %s after the late hook, want idle", got)
+	}
+
+	// A hook stamped after the Acknowledge still applies.
+	clock.Advance(time.Second)
+	apply(t, h, host.Event{SessionID: "a", State: host.Working})
+	assertStates(t, sessionStates(t, dev.Received()), "done", "idle", "working")
+}
+
+func TestAnInterruptShortlyBeforeAnAcknowledgeOnTheDeviceStillReturnsTheSessionToIdle(t *testing.T) {
+	clock := clockAt(1760432400000)
+	dev := newReferenceDevice(t)
+	transcripts := &fakeTranscripts{clock: clock}
+	h := host.New(clock, devices(dev), host.WithTranscriptProbe(transcripts))
+	defer h.Close()
+	h.Tick()
+	apply(t, h,
+		host.Event{SessionID: "a", State: host.AwaitingInput, Transcript: "/a.jsonl"},
+		host.Event{SessionID: "z", State: host.Done},
+	)
+	clock.Advance(300 * time.Millisecond)
+	transcripts.interrupted = clock.Now() // Esc on the permission prompt
+
+	clock.Advance(500 * time.Millisecond)
+	acknowledgeOnDevice(t, dev, 1) // before the probe reads the transcript
+	clock.Advance(host.ProbeInterval)
+	h.Tick()
+
+	if got := h.Status().Sessions[0]; got.ID != "a" || got.State != host.Idle {
+		t.Fatalf("session %s is %s, want a idle", got.ID, got.State)
+	}
+}

@@ -4,13 +4,13 @@ import "time"
 
 // Status is what `codino status` shows: the known sessions and the Device.
 type Status struct {
-	AggregateState SessionState    `json:"aggregate_state"`
-	Sessions       []SessionStatus `json:"sessions"`
-	Device         DeviceStatus    `json:"device"`
+	AggregateState SessionState     `json:"aggregate_state"`
+	Sessions       []SessionSummary `json:"sessions"`
+	Device         DeviceConnection `json:"device"`
 }
 
-// SessionStatus is one Agent Session as the Session Tracker holds it.
-type SessionStatus struct {
+// SessionSummary is one Agent Session as the Session Tracker holds it.
+type SessionSummary struct {
 	ID           string       `json:"id"`
 	State        SessionState `json:"state"`
 	StateEntered time.Time    `json:"state_entered"`
@@ -19,8 +19,8 @@ type SessionStatus struct {
 	Tile         int          `json:"tile"`
 }
 
-// DeviceStatus describes the Device connection.
-type DeviceStatus struct {
+// DeviceConnection describes the link to the Device.
+type DeviceConnection struct {
 	Claimed  bool   `json:"claimed"`
 	Name     string `json:"name,omitempty"`
 	Firmware string `json:"firmware,omitempty"`
@@ -34,15 +34,15 @@ func (h *Host) Status() Status {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.dropGoneDevice()
-	st := Status{AggregateState: h.sessions.aggregateState(), Sessions: []SessionStatus{}}
+	st := Status{AggregateState: h.sessions.aggregateState(), Sessions: []SessionSummary{}}
 	for _, s := range h.sessions.ordered() {
-		st.Sessions = append(st.Sessions, SessionStatus{
+		st.Sessions = append(st.Sessions, SessionSummary{
 			ID: s.id, State: s.state, StateEntered: s.stateEntered,
 			Project: s.project, ProjectColor: s.projectColor, Tile: s.tile,
 		})
 	}
 	if h.device != nil {
-		st.Device = DeviceStatus{
+		st.Device = DeviceConnection{
 			Claimed:  true,
 			Name:     h.device.Name,
 			Firmware: h.device.HelloReply.Firmware,

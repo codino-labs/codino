@@ -38,6 +38,9 @@ type DiscovererFunc func() []Candidate
 
 func (f DiscovererFunc) Candidates() []Candidate { return f() }
 
+// NoDevices offers no candidates: a Host with nothing to drive.
+var NoDevices = DiscovererFunc(func() []Candidate { return nil })
+
 // VersionMismatchError reports a Device speaking another protocol version. The
 // Host refuses to drive it; the user has to update the firmware.
 type VersionMismatchError struct {
@@ -90,7 +93,7 @@ func handshake(c Candidate, now time.Time) (*Device, error) {
 	hello, err := protocol.Encode(protocol.NewHello(now.UnixMilli()))
 	if err != nil {
 		port.Close()
-		return nil, err
+		return nil, fmt.Errorf("hello to %s: %w", c.Name, err)
 	}
 	if _, err := port.Write(hello); err != nil {
 		port.Close()
@@ -99,13 +102,24 @@ func handshake(c Candidate, now time.Time) (*Device, error) {
 
 	lines := bufio.NewReader(port)
 	type result struct {
-		line []byte
-		err  error
+		reply protocol.HelloReply
+		err   error
 	}
 	read := make(chan result, 1)
 	go func() {
-		line, err := lines.ReadBytes('\n')
-		read <- result{line, err}
+		for {
+			line, err := lines.ReadBytes('\n')
+			if err != nil {
+				read <- result{err: fmt.Errorf("no hello_reply: %w", err)}
+				return
+			}
+			reply, err := protocol.DecodeHelloReply(line)
+			if errors.Is(err, protocol.ErrNotHelloReply) {
+				continue // boot noise or a message the handshake doesn't need
+			}
+			read <- result{reply, err}
+			return
+		}
 	}()
 	var r result
 	select {
@@ -116,13 +130,9 @@ func handshake(c Candidate, now time.Time) (*Device, error) {
 	}
 	if r.err != nil {
 		port.Close()
-		return nil, fmt.Errorf("%s: no hello_reply: %w", c.Name, r.err)
+		return nil, fmt.Errorf("%s: %w", c.Name, r.err)
 	}
-	reply, err := protocol.DecodeHelloReply(r.line)
-	if err != nil {
-		port.Close()
-		return nil, fmt.Errorf("%s: %w", c.Name, err)
-	}
+	reply := r.reply
 	if reply.Protocol != protocol.Version {
 		port.Close()
 		return nil, &VersionMismatchError{Candidate: c.Name, Device: reply.Protocol}
@@ -144,11 +154,18 @@ func (d *Device) drain(lines *bufio.Reader) {
 	}
 }
 
+// WriteTimeout bounds one write to a Device that stopped reading, on
+// transports that support write deadlines.
+const WriteTimeout = time.Second
+
 // Send writes one protocol message. An error means the Device is gone.
 func (d *Device) Send(msg any) error {
 	line, err := protocol.Encode(msg)
 	if err != nil {
 		return err
+	}
+	if p, ok := d.port.(interface{ SetWriteDeadline(time.Time) error }); ok {
+		p.SetWriteDeadline(time.Now().Add(WriteTimeout))
 	}
 	if _, err := d.port.Write(line); err != nil {
 		d.Close()

@@ -1,6 +1,6 @@
-// Package daemon is the Host Daemon's local socket: the server that feeds a
-// host.Host, and the client that `codino event` (and later the Claude Code
-// Adapter) use to reach it, spawning the daemon on demand.
+// Package daemon is the Host Daemon's local socket: the listening end that
+// feeds a host.Host, and the Client that `codino event` (and later the Claude
+// Code Adapter) use to reach it, spawning the daemon on demand.
 package daemon
 
 import (

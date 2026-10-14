@@ -18,13 +18,13 @@ const (
 	Error         SessionState = "error"
 )
 
-// SessionStates lists every Session State, least urgent first.
-var SessionStates = []SessionState{Idle, Working, Done, Error, AwaitingInput}
+// sessionStates lists every Session State, least urgent first.
+var sessionStates = []SessionState{Idle, Working, Done, Error, AwaitingInput}
 
 // urgency orders Session States for the Aggregate State: Awaiting Input >
 // Error > Done > Working > Idle.
 func (s SessionState) urgency() int {
-	for i, state := range SessionStates {
+	for i, state := range sessionStates {
 		if s == state {
 			return i
 		}

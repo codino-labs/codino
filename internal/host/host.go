@@ -5,6 +5,7 @@
 package host
 
 import (
+	"log/slog"
 	"sync"
 	"time"
 
@@ -31,8 +32,10 @@ type Host struct {
 	device   *devicelink.Device
 	// lastHeartbeat is when the Device last heard from the Host.
 	lastHeartbeat time.Time
-	// deviceProblem is why the last claim failed.
-	deviceProblem string
+	// deviceProblem is why the last claim failed, at lastFailedClaim.
+	deviceProblem   string
+	lastFailedClaim time.Time
+	closed          bool
 }
 
 // New returns a Host that finds Devices through devices.
@@ -73,12 +76,17 @@ func (h *Host) Tick() {
 			h.lastHeartbeat = now
 		}
 	}
-	claimed := h.device != nil
+	look := h.device == nil && !h.closed &&
+		(h.lastFailedClaim.IsZero() || h.clock.Now().Sub(h.lastFailedClaim) >= ClaimRetryInterval)
 	h.mu.Unlock()
-	if !claimed {
+	if look {
 		h.claim()
 	}
 }
+
+// ClaimRetryInterval is how long the Host waits after a failed claim before
+// looking for a Device again, so a broken candidate isn't reopened in a loop.
+const ClaimRetryInterval = 2 * time.Second
 
 // claim looks for a Device and, once one answers the handshake, sends it every
 // known session. The handshake can take up to devicelink.HandshakeTimeout, so
@@ -89,11 +97,21 @@ func (h *Host) claim() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if err != nil {
-		h.deviceProblem = err.Error()
+		if problem := err.Error(); problem != h.deviceProblem {
+			slog.Info("no Device claimed", "problem", problem)
+			h.deviceProblem = problem
+		}
+		h.lastFailedClaim = now
 		return
 	}
+	if h.closed {
+		dev.Close()
+		return
+	}
+	slog.Info("Device claimed", "device", dev.Name, "firmware", dev.HelloReply.Firmware)
 	h.device = dev
 	h.deviceProblem = ""
+	h.lastFailedClaim = time.Time{}
 	h.lastHeartbeat = now // hello counts as one
 	for _, s := range h.sessions.ordered() {
 		h.send(upsert(s))
@@ -131,10 +149,11 @@ func upsert(s *session) protocol.SessionUpsert {
 	return protocol.NewSessionUpsert(s.id, string(s.state), s.projectColor, s.stateEntered.UnixMilli(), s.tile)
 }
 
-// Close releases the Device.
+// Close releases the Device; the Host claims no other afterwards.
 func (h *Host) Close() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.closed = true
 	if h.device != nil {
 		h.device.Close()
 		h.device = nil

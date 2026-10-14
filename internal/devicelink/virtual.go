@@ -15,7 +15,6 @@ import (
 // draws on stderr goes to Display.
 type VirtualDevice struct {
 	Path    string
-	Args    []string
 	Display io.Writer
 }
 
@@ -24,22 +23,26 @@ func (v VirtualDevice) Candidates() []Candidate {
 }
 
 func (v VirtualDevice) open() (io.ReadWriteCloser, error) {
-	cmd := exec.Command(v.Path, v.Args...)
+	cmd := exec.Command(v.Path)
 	cmd.Stderr = v.Display
-	stdin, err := cmd.StdinPipe()
+	// os.Pipes rather than cmd.StdinPipe/StdoutPipe: Wait must not close the
+	// ends the Device Link uses, and os.File supports write deadlines. The
+	// reader sees EOF once the Virtual Device exits, which tells the Device
+	// Link it is gone.
+	childStdin, stdin, err := os.Pipe()
 	if err != nil {
 		return nil, fmt.Errorf("virtual device stdin: %w", err)
 	}
-	// An os.Pipe rather than cmd.StdoutPipe: Wait must not close the read
-	// end while the Device Link still reads it. The reader sees EOF once the
-	// Virtual Device exits, which tells the Device Link it is gone.
 	stdout, childStdout, err := os.Pipe()
 	if err != nil {
+		childStdin.Close()
 		stdin.Close()
 		return nil, fmt.Errorf("virtual device stdout: %w", err)
 	}
+	cmd.Stdin = childStdin
 	cmd.Stdout = childStdout
 	err = cmd.Start()
+	childStdin.Close()
 	childStdout.Close()
 	if err != nil {
 		stdin.Close()
@@ -56,7 +59,7 @@ func (v VirtualDevice) open() (io.ReadWriteCloser, error) {
 
 // process is a subprocess seen as a port.
 type process struct {
-	stdin  io.WriteCloser
+	stdin  *os.File
 	stdout io.ReadCloser
 	kill   func() error
 	exited chan struct{}
@@ -64,6 +67,8 @@ type process struct {
 
 func (p *process) Read(b []byte) (int, error)  { return p.stdout.Read(b) }
 func (p *process) Write(b []byte) (int, error) { return p.stdin.Write(b) }
+
+func (p *process) SetWriteDeadline(t time.Time) error { return p.stdin.SetWriteDeadline(t) }
 
 // Close ends the protocol stream, which makes the Virtual Device exit, and
 // kills it if it hasn't within a second.

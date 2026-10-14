@@ -22,12 +22,12 @@ var ErrAlreadyRunning = errors.New("a Host Daemon is already running")
 // a server goroutine.
 const requestTimeout = 2 * time.Second
 
-// Listener is the daemon's end of the local socket. It holds the daemon lock
-// until closed.
+// Listener is the daemon's end of the local socket. Close stops listening and
+// removes the socket; the daemon lock stays held until Unlock, so the daemon
+// can release its Device before another daemon may start.
 type Listener struct {
 	net.Listener
-	paths Paths
-	lock  *os.File
+	lock *os.File
 }
 
 // Listen takes the daemon lock and opens the Unix socket with owner-only
@@ -56,14 +56,14 @@ func Listen(paths Paths) (*Listener, error) {
 		lock.Close()
 		return nil, fmt.Errorf("socket permissions: %w", err)
 	}
-	return &Listener{Listener: ln, paths: paths, lock: lock}, nil
+	return &Listener{Listener: ln, lock: lock}, nil
 }
 
-// Close stops listening, removes the socket and releases the lock.
-func (l *Listener) Close() error {
-	err := l.Listener.Close() // removes the socket file too
+// Unlock closes the listener if still open and releases the daemon lock.
+// Call it last.
+func (l *Listener) Unlock() {
+	l.Listener.Close()
 	l.lock.Close()
-	return err
 }
 
 // Serve answers requests on ln with h until ctx is done or ln fails.
@@ -105,14 +105,14 @@ func serveConn(conn net.Conn, h *host.Host) {
 
 func handle(req Request, h *host.Host) Response {
 	switch req.Op {
-	case "events":
+	case OpEvents:
 		for _, e := range req.Events {
 			if err := h.Apply(e); err != nil {
 				return Response{Error: err.Error()}
 			}
 		}
 		return Response{}
-	case "status":
+	case OpStatus:
 		st := h.Status()
 		return Response{Status: &st}
 	default:

@@ -34,14 +34,14 @@ func (c Client) Deliver(ctx context.Context, events ...host.Event) error {
 			return err
 		}
 	}
-	_, err := c.call(ctx, Request{Op: "events", Events: events}, c.Spawn)
+	_, err := c.call(ctx, Request{Op: OpEvents, Events: events}, c.Spawn)
 	return err
 }
 
 // Status asks a running Host Daemon for its sessions and Device. It never
 // spawns one.
 func (c Client) Status(ctx context.Context) (host.Status, error) {
-	resp, err := c.call(ctx, Request{Op: "status"}, nil)
+	resp, err := c.call(ctx, Request{Op: OpStatus}, nil)
 	if err != nil {
 		return host.Status{}, err
 	}
@@ -128,7 +128,7 @@ func SpawnCommand(paths Paths, executable string, args ...string) func() error {
 		cmd.Stderr = log
 		detach(cmd)
 		if err := cmd.Start(); err != nil {
-			return err
+			return fmt.Errorf("start %s: %w", executable, err)
 		}
 		return cmd.Process.Release()
 	}

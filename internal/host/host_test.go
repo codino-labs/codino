@@ -30,7 +30,9 @@ func clockAt(unixMilli int64) *fakeClock { return &fakeClock{now: time.UnixMilli
 // fakeDevice is the fake Device Link transport: it records every protocol line
 // the Host writes and answers hello with a scripted reply.
 type fakeDevice struct {
-	reply string // sent back for every hello; "" closes the port instead
+	// reply is sent back for every hello, one line per element; the port
+	// closes after the last line unless it is a hello_reply.
+	reply []string
 
 	mu       sync.Mutex
 	received []string
@@ -40,7 +42,7 @@ type fakeDevice struct {
 	once     sync.Once
 }
 
-func newFakeDevice(reply string) *fakeDevice {
+func newFakeDevice(reply ...string) *fakeDevice {
 	return &fakeDevice{reply: reply, toHost: make(chan []byte, 16), closed: make(chan struct{})}
 }
 
@@ -60,10 +62,11 @@ func (d *fakeDevice) Write(p []byte) (int, error) {
 		d.received = append(d.received, line)
 		d.mu.Unlock()
 		if strings.Contains(line, `"type":"hello"`) {
-			if d.reply == "" {
+			for _, r := range d.reply {
+				d.toHost <- []byte(r + "\n")
+			}
+			if n := len(d.reply); n == 0 || !strings.Contains(d.reply[n-1], `"hello_reply"`) {
 				d.Close()
-			} else {
-				d.toHost <- []byte(d.reply + "\n")
 			}
 		}
 	}
@@ -113,7 +116,7 @@ func devices(ds ...*fakeDevice) devicelink.Discoverer {
 }
 
 // noDevices is a Host with nothing plugged in.
-var noDevices = devicelink.DiscovererFunc(func() []devicelink.Candidate { return nil })
+var noDevices = devicelink.NoDevices
 
 // fixture reads the single message of a shared protocol fixture.
 func fixture(t *testing.T, name string) string {
@@ -275,27 +278,28 @@ func TestSessionsKeepTheirTileAndNewcomersTakeTheFirstFreeOne(t *testing.T) {
 	})
 }
 
-func TestHostClaimsOnlyADeviceThatAnswersTheHandshake(t *testing.T) {
+func TestHostClaimsOnlyADeviceThatAnswersTheHandshakeEvenAfterBootNoise(t *testing.T) {
 	clock := clockAt(1760432400000)
-	silent := newFakeDevice("")                                     // closes without a reply
-	otherBoard := newFakeDevice("ets Jun  8 2016 00:22:57 rst:0x1") // some other ESP32's boot log
-	codino := newReferenceDevice(t)
-	h := host.New(clock, devices(silent, otherBoard, codino))
+	silent := newFakeDevice()                                          // closes without a reply
+	otherBoard := newFakeDevice("ets Jun  8 2016 00:22:57 rst:0x1")    // some other ESP32's boot log
+	incomplete := newFakeDevice(`{"type":"hello_reply","protocol":0}`) // no firmware, no Hardware Profile
+	reference := newFakeDevice("ESP-ROM:esp32s3-20210327", "", fixture(t, "hello-reply.jsonl"))
+	h := host.New(clock, devices(silent, otherBoard, incomplete, reference))
 	defer h.Close()
 	apply(t, h, host.Event{SessionID: "a", State: host.Working})
 
 	h.Tick()
 
-	for name, d := range map[string]*fakeDevice{"silent": silent, "other board": otherBoard} {
+	for name, d := range map[string]*fakeDevice{"silent": silent, "other board": otherBoard, "incomplete": incomplete} {
 		if got := d.Received(); len(got) != 1 {
 			t.Errorf("%s got %q, want only the hello", name, got)
 		}
 	}
-	assertMessages(t, since(codino, 1), []string{
+	assertMessages(t, since(reference, 1), []string{
 		`{"type":"session_upsert","id":"a","state":"working","project_color":"#3a86ff","state_entered":1760432400000,"tile":0}`,
 	})
-	if dev := h.Status().Device; !dev.Claimed || dev.Name != "fake2" || dev.Firmware != "0.1.0" {
-		t.Errorf("Status().Device = %+v, want fake2 claimed with firmware 0.1.0", dev)
+	if dev := h.Status().Device; !dev.Claimed || dev.Name != "fake3" || dev.Firmware != "0.1.0" {
+		t.Errorf("Status().Device = %+v, want fake3 claimed with firmware 0.1.0", dev)
 	}
 }
 
@@ -382,7 +386,7 @@ func TestStatusListsSessionsByTile(t *testing.T) {
 
 	st := h.Status()
 
-	want := []host.SessionStatus{
+	want := []host.SessionSummary{
 		{ID: "a", State: host.AwaitingInput, StateEntered: time.UnixMilli(1760432401000), Project: "/src/app", ProjectColor: "#3a86ff", Tile: 0},
 		{ID: "b", State: host.Done, StateEntered: time.UnixMilli(1760432401000), ProjectColor: "#3a86ff", Tile: 1},
 	}
@@ -414,5 +418,29 @@ func TestInvalidEventsAreRejected(t *testing.T) {
 				t.Errorf("%d sessions after a rejected event, want 0", n)
 			}
 		})
+	}
+}
+
+func TestAfterAFailedClaimTheHostWaitsBeforeLookingAgain(t *testing.T) {
+	clock := clockAt(1760432400000)
+	var plugged []*fakeDevice
+	h := host.New(clock, devicelink.DiscovererFunc(func() []devicelink.Candidate {
+		return devices(plugged...).Candidates()
+	}))
+	defer h.Close()
+	h.Tick() // nothing plugged in
+
+	dev := newReferenceDevice(t)
+	plugged = append(plugged, dev)
+	clock.Advance(host.ClaimRetryInterval - time.Millisecond)
+	h.Tick()
+	if got := dev.Received(); len(got) != 0 {
+		t.Fatalf("looked for a Device before the retry interval: %q", got)
+	}
+	clock.Advance(time.Millisecond)
+	h.Tick()
+
+	if !h.Status().Device.Claimed {
+		t.Error("Device not claimed after the retry interval")
 	}
 }

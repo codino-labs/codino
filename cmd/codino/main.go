@@ -90,7 +90,7 @@ func event(paths daemon.Paths, args []string) error {
 		return err
 	}
 	if fs.NArg() > 0 || (*state == "") == !*end {
-		fmt.Fprint(os.Stderr, "codino event: give --state or --end\n"+usage)
+		fmt.Fprintf(os.Stderr, "%s event: give --state or --end\n%s", name, usage)
 		return errUsage
 	}
 	e := host.Event{SessionID: *id, State: host.SessionState(*state), End: *end}
@@ -102,7 +102,7 @@ func event(paths daemon.Paths, args []string) error {
 		e.Project = abs
 	}
 	if err := e.Validate(); err != nil {
-		fmt.Fprintf(os.Stderr, "codino event: %v\n%s", err, usage)
+		fmt.Fprintf(os.Stderr, "%s event: %v\n%s", name, err, usage)
 		return errUsage
 	}
 
@@ -176,11 +176,11 @@ func runDaemon(paths daemon.Paths, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer ln.Close()
+	defer ln.Unlock() // after h.Close below: release the Device, then the lock
 
 	// Real USB serial discovery is not built yet: without a Virtual Device the
 	// daemon tracks sessions but drives no Device.
-	var devices devicelink.Discoverer = devicelink.DiscovererFunc(func() []devicelink.Candidate { return nil })
+	var devices devicelink.Discoverer = devicelink.NoDevices
 	if *virtual != "" {
 		path, err := filepath.Abs(*virtual)
 		if err != nil {

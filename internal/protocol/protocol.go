@@ -4,6 +4,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -84,25 +85,32 @@ func Encode(msg any) ([]byte, error) {
 	return append(line, '\n'), nil
 }
 
-// DecodeHelloReply parses one line as a hello_reply. It fails when the line is
-// not JSON, is another message type, or lacks the fields the Host needs.
+// ErrNotHelloReply marks a line that is not a hello_reply at all: not JSON, or
+// another message type. Receivers ignore such lines; a Device may print boot
+// noise before it answers.
+var ErrNotHelloReply = errors.New("not a hello_reply")
+
+// DecodeHelloReply parses one line as a hello_reply. It fails with
+// ErrNotHelloReply for a line to ignore, and with another error for a
+// hello_reply that lacks a field the Host needs (protocol, firmware,
+// hardware_profile).
 func DecodeHelloReply(line []byte) (HelloReply, error) {
 	var raw struct {
-		Type     *string `json:"type"`
-		Protocol *int    `json:"protocol"`
-		HelloReply
+		Type            *string          `json:"type"`
+		Protocol        *int             `json:"protocol"`
+		Firmware        *string          `json:"firmware"`
+		HardwareProfile *HardwareProfile `json:"hardware_profile"`
 	}
-	if err := json.Unmarshal(line, &raw); err != nil {
-		return HelloReply{}, fmt.Errorf("hello_reply: %w", err)
+	if err := json.Unmarshal(line, &raw); err != nil || raw.Type == nil || *raw.Type != "hello_reply" {
+		return HelloReply{}, ErrNotHelloReply
 	}
-	if raw.Type == nil || *raw.Type != "hello_reply" {
-		return HelloReply{}, fmt.Errorf("hello_reply: unexpected message %q", line)
+	if raw.Protocol == nil || raw.Firmware == nil || raw.HardwareProfile == nil {
+		return HelloReply{}, fmt.Errorf("hello_reply: missing protocol, firmware or hardware_profile in %q", line)
 	}
-	if raw.Protocol == nil {
-		return HelloReply{}, fmt.Errorf("hello_reply: missing protocol")
-	}
-	reply := raw.HelloReply
-	reply.Type = *raw.Type
-	reply.Protocol = *raw.Protocol
-	return reply, nil
+	return HelloReply{
+		Type:            *raw.Type,
+		Protocol:        *raw.Protocol,
+		Firmware:        *raw.Firmware,
+		HardwareProfile: *raw.HardwareProfile,
+	}, nil
 }

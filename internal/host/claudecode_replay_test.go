@@ -277,3 +277,41 @@ func TestClaudeCodeInterruptedTurnGoesBackToIdle(t *testing.T) {
 		})
 	}
 }
+
+func TestInterruptRightAfterAHookWhoseProcessStartedLateStillGoesIdle(t *testing.T) {
+	// A hook stamps its event when its process starts, a little after Claude
+	// Code fired it; the human may press Esc in between.
+	clock := clockAt(recordingStart)
+	transcripts := &fakeTranscripts{clock: clock, interrupted: clock.Now().Add(time.Second)}
+	dev := newReferenceDevice(t)
+	h := host.New(clock, devices(dev), host.WithTranscriptProbe(transcripts))
+	defer h.Close()
+	h.Tick()
+	clock.Advance(time.Second + 100*time.Millisecond)
+	apply(t, h, host.Event{SessionID: "a", State: host.Working, Transcript: "/t/a.jsonl",
+		At: transcripts.interrupted.Add(50 * time.Millisecond)})
+
+	clock.Advance(2 * time.Second)
+	h.Tick()
+
+	assertStates(t, sessionStates(t, dev.Received()), "working", "idle")
+}
+
+func TestInterruptBeforeTheNextPromptKeepsTheNewTurnWorking(t *testing.T) {
+	clock := clockAt(recordingStart)
+	transcripts := &fakeTranscripts{clock: clock, interrupted: clock.Now()}
+	dev := newReferenceDevice(t)
+	h := host.New(clock, devices(dev), host.WithTranscriptProbe(transcripts))
+	defer h.Close()
+	h.Tick()
+	clock.Advance(2 * time.Second)
+	apply(t, h, host.Event{SessionID: "a", State: host.Working, Transcript: "/t/a.jsonl"})
+
+	clock.Advance(2 * time.Second)
+	h.Tick()
+
+	assertStates(t, sessionStates(t, dev.Received()), "working")
+	if len(transcripts.probed) == 0 {
+		t.Fatal("the transcript was never probed")
+	}
+}

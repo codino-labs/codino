@@ -43,9 +43,9 @@ type backgroundTask struct {
 	Status string `json:"status"`
 }
 
-// subagentRunning reports whether a background subagent is still running: its
+// subagentActive reports whether a background subagent is still running: its
 // hand-back starts a new turn on its own, so the turn isn't Done.
-func (in input) subagentRunning() bool {
+func (in input) subagentActive() bool {
 	for _, t := range in.BackgroundTasks {
 		if t.Type == "subagent" && t.Status == "running" {
 			return true
@@ -99,7 +99,7 @@ func Events(h Hook) ([]host.Event, error) {
 		e.State = host.AwaitingInput
 	case "Stop":
 		e.State = host.Done
-		if in.subagentRunning() {
+		if in.subagentActive() {
 			e.State = host.Working
 		}
 	case "StopFailure":

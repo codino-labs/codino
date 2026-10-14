@@ -183,13 +183,7 @@ func (h *Host) transcriptsToProbe() map[string]string {
 		return nil
 	}
 	h.lastTranscriptCheck = now
-	probe := map[string]string{}
-	for id, s := range h.sessions.sessions {
-		if s.transcript != "" && (s.state == Working || s.state == AwaitingInput) {
-			probe[id] = s.transcript
-		}
-	}
-	return probe
+	return h.sessions.transcriptsToProbe()
 }
 
 // probeTranscripts reads the transcripts without h.mu (it is file I/O) and

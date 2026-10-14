@@ -117,10 +117,7 @@ const endedMemory = time.Minute
 // apply records the event at now. It returns the session when it changed (nil
 // when it didn't) and whether it was removed.
 func (t *tracker) apply(e Event, now time.Time) (s *session, removed bool) {
-	at := e.At
-	if at.IsZero() || at.After(now) {
-		at = now
-	}
+	at := notAfter(e.At, now)
 	for id, ended := range t.ended {
 		if now.Sub(ended) > endedMemory {
 			delete(t.ended, id)
@@ -172,16 +169,46 @@ func (t *tracker) apply(e Event, now time.Time) (s *session, removed bool) {
 // when it changed.
 func (t *tracker) interrupt(id string, at, now time.Time) *session {
 	s := t.sessions[id]
-	if s == nil || (s.state != Working && s.state != AwaitingInput) || at.Before(s.lastEventAt) {
+	if s == nil || !s.interruptible() || at.Before(s.lastEventAt.Add(-hookStartLag)) {
 		return nil
 	}
-	if at.After(now) {
-		at = now
+	at = notAfter(at, now)
+	if at.After(s.lastEventAt) {
+		s.lastEventAt = at
 	}
-	s.lastEventAt = at
 	s.state = Idle
 	s.stateEntered = at
 	return s
+}
+
+// hookStartLag bounds how long after Claude Code fires a hook its process
+// starts and stamps the event: an interrupt this much older than the last
+// event may still have come after it. A human can't interrupt a turn and
+// submit a new prompt that fast.
+const hookStartLag = 250 * time.Millisecond
+
+// interruptible reports whether the human interrupting the turn would leave
+// the session stuck without a hook: Working or Awaiting Input.
+func (s *session) interruptible() bool { return s.state == Working || s.state == AwaitingInput }
+
+// notAfter clamps an Agent's timestamp to the Host clock.
+func notAfter(at, now time.Time) time.Time {
+	if at.IsZero() || at.After(now) {
+		return now
+	}
+	return at
+}
+
+// transcriptsToProbe returns the transcript of every session a hook-less
+// interrupt could leave stuck, by session id.
+func (t *tracker) transcriptsToProbe() map[string]string {
+	probe := map[string]string{}
+	for id, s := range t.sessions {
+		if s.transcript != "" && s.interruptible() {
+			probe[id] = s.transcript
+		}
+	}
+	return probe
 }
 
 // freeTile is the lowest Tile slot no session holds. A session keeps its slot

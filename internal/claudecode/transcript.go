@@ -20,13 +20,13 @@ type Transcripts struct{}
 const interruptMarker = "[Request interrupted by user"
 
 // Reading the transcript backwards from its end: first this many bytes,
-// doubling until a conversation entry turns up, up to tailLimit.
+// doubling until a message entry turns up, up to tailLimit.
 const (
 	tailStart = 64 << 10
 	tailLimit = 4 << 20
 )
 
-// Interrupted reports whether the latest conversation entry (user or
+// Interrupted reports whether the latest message entry (user or
 // assistant; bookkeeping entries are skipped) is the interrupt marker, and
 // when it was written.
 func (Transcripts) Interrupted(path string) (time.Time, bool) {
@@ -46,7 +46,7 @@ func (Transcripts) Interrupted(path string) (time.Time, bool) {
 		if _, err := f.ReadAt(buf, size-n); err != nil && err != io.EOF {
 			return time.Time{}, false
 		}
-		if e, found := latestConversationEntry(buf, n == size); found {
+		if e, found := latestMessageEntry(buf, n == size); found {
 			return e.interrupted()
 		}
 		if n == size || n >= tailLimit {
@@ -64,10 +64,10 @@ type entry struct {
 	} `json:"message"`
 }
 
-// latestConversationEntry finds the last user or assistant entry among the
+// latestMessageEntry finds the last user or assistant entry among the
 // complete lines of tail. whole says tail starts at the file's start, so its
 // first line is complete too.
-func latestConversationEntry(tail []byte, whole bool) (entry, bool) {
+func latestMessageEntry(tail []byte, whole bool) (entry, bool) {
 	lines := bytes.Split(tail, []byte("\n"))
 	// The last element follows the last newline: empty, or a line still
 	// being written.

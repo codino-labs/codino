@@ -57,7 +57,7 @@ func TestOnlyPromptsAcknowledge(t *testing.T) {
 	}
 }
 
-func TestEventsCarryTheProcessAndTranscriptOfTheSession(t *testing.T) {
+func TestEventsCarryThePIDAndTranscriptOfTheSession(t *testing.T) {
 	got := events(t, `{"session_id":"s","hook_event_name":"PreToolUse","cwd":"/tmp/spike/proj","transcript_path":"/home/user/.claude/projects/p/s.jsonl"}`, 139150)
 
 	want := host.Event{SessionID: "s", State: host.Working, Project: "/tmp/spike/proj", At: receivedAt,

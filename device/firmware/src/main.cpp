@@ -7,7 +7,7 @@
 // - USB CDC serial through TinyUSB, with our product string: protocol lines
 //   in, replies out.
 // - The Hardware Profile from its flash partition, the reference one when it
-//   is blank or holds one this board can't drive.
+//   is blank or holds one the firmware can't drive.
 // - Preferences and installed Themes and Sprite Packs in LittleFS.
 // - The LEDs through FastLED, the Device core's frame laid on the wiring.
 #include <Arduino.h>
@@ -88,7 +88,7 @@ void addLeds(int pin, CRGB* data, int count) {
 
 // The Hardware Profile stored on the Device; the reference one when the
 // partition is blank (stored there, so it reads as chosen next time) or
-// holds one this board can't drive (left as it is, for whoever wrote it).
+// holds one the firmware can't drive (left as it is, for whoever wrote it).
 device::HardwareProfile loadHardwareProfile() {
   const device::HardwareProfile reference = device::referenceHardwareProfile();
   const esp_partition_t* partition =
@@ -128,17 +128,20 @@ void setup() {
   wiring = std::make_unique<device::LedWiring>(profile);
   leds.assign(wiring->count(), CRGB::Black);
   addLeds(profile.dataPin, leds.data(), static_cast<int>(leds.size()));
-  // The core keeps every channel under the brightness cap; FastLED adds the
-  // current budget on top (its model is a 5050 LED's, so it errs low).
+  // The core keeps every channel under the brightness cap, which is what
+  // keeps the matrix inside its current budget: FastLED's power limiter
+  // (modelled on 5050 LEDs) would dim bright frames below the cap.
   FastLED.setBrightness(255);
   FastLED.setDither(DISABLE_DITHER);
-  FastLED.setMaxPowerInVoltsAndMilliamps(5, profile.currentCapMa);
   FastLED.show();
 
   // Formats the partition when it holds no LittleFS yet (the first boot).
-  LittleFS.begin(true, "/littlefs", 4, kLittleFsLabel);
-  preferencesCache = std::make_unique<device::FilePreferencesCache>(files, "/preferences.jsonl");
-  themeStore = std::make_unique<device::FileThemeStore>(files, "/installed");
+  // Without one the Device still works, keeping Preferences and Themes in
+  // RAM until it reboots.
+  if (LittleFS.begin(true, "/littlefs", 4, kLittleFsLabel)) {
+    preferencesCache = std::make_unique<device::FilePreferencesCache>(files, "/preferences.jsonl");
+    themeStore = std::make_unique<device::FileThemeStore>(files, "/installed");
+  }
   core = std::make_unique<device::DeviceCore>(profile, FIRMWARE_VERSION, deviceClock, device::Preferences{},
                                               preferencesCache.get(), themeStore.get());
 

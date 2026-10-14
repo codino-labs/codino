@@ -21,7 +21,7 @@ std::string hardwareProfileLine(const HardwareProfile& profile);
 // Reads a stored profile: the line up to the first newline (a flash
 // partition holds erased bytes after it). False, leaving `profile` as it was,
 // unless every field is there and valid: width and height 1-255 with a Raw
-// Mode frame fitting the line buffer, data_pin 0-255 (whether the board can
+// Mode frame fitting the line buffer, data_pin 0-255 (whether the Device can
 // drive it is the firmware's to say), color_order the letters R, G and B in
 // some order, brightness_cap 1-255, current_cap_ma 1-65535, and the booleans.
 bool parseHardwareProfile(std::string_view stored, HardwareProfile& profile);

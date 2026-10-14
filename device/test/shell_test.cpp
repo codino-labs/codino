@@ -56,14 +56,7 @@ std::vector<uint8_t> sent(const device::HardwareProfile& profile, const device::
 
 }  // namespace
 
-// --- LED wiring
-
-TEST_CASE("LED wiring: rows run left to right from the top-left LED, in RGB") {
-  CHECK(sent(wiring3x2(false, "RGB"), whereAmIFrame()) == std::vector<uint8_t>{
-                                                             1, 2, 3, 11, 2, 3, 21, 2, 3,     // row 0
-                                                             1, 12, 3, 11, 12, 3, 21, 12, 3,  // row 1
-                                                         });
-}
+// --- Line framing
 
 TEST_CASE("line reader: lines come out whole however the reads split them") {
   device::LineReader reader;
@@ -99,6 +92,15 @@ TEST_CASE("line reader: a line longer than the Device's line buffer is dropped u
   const auto lines = linesFrom(reader, {longest + "\n", tooLong.substr(0, 5000), tooLong.substr(5000) + "tail\n",
                                         R"({"type":"heartbeat"})" "\n"});
   CHECK(lines == std::vector<std::string>{longest, R"({"type":"heartbeat"})"});
+}
+
+// --- LED wiring
+
+TEST_CASE("LED wiring: rows run left to right from the top-left LED, in RGB") {
+  CHECK(sent(wiring3x2(false, "RGB"), whereAmIFrame()) == std::vector<uint8_t>{
+                                                             1, 2, 3, 11, 2, 3, 21, 2, 3,     // row 0
+                                                             1, 12, 3, 11, 12, 3, 21, 12, 3,  // row 1
+                                                         });
 }
 
 TEST_CASE("LED wiring: serpentine wiring runs every other row right to left") {

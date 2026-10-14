@@ -13,7 +13,7 @@ The firmware reports this profile in its `hello_reply`, and `protocol/fixtures/h
 | `serpentine` | `false` | Schematic [2]: U1…U64 are chained row by row (`DOUT_1`…`DOUT_7` link the rows). Waveshare's demos address LED `row*8+col` [3] and use `NEO_MATRIX_ROWS + NEO_MATRIX_PROGRESSIVE` (HTTP demo). | Likely. The schematic shows the electrical chain, not the placement on the PCB. One community ESPHome config maps the matrix as serpentine *columns* turned 180° [5]. Check it on the board (step 4). |
 | `color_order` | `"RGB"` | Waveshare's Color and Game demos use `NEO_RGB` [3]. Robojax, writing for this board, says "The matrix on this board expects RGB order" [4]. | Uncertain. Waveshare's Font and HTTP demos use `NEO_GRB` [3]. Check it on the board (step 4). |
 | `brightness_cap` | 48 | Waveshare warns that high brightness heats the board fast and can damage it [1][3]. Its demos cap brightness at 40–60 of 255 [3]. | A conservative guess. Check the heat (step 9). |
-| `current_cap_ma` | 300 | An estimate. 64 LEDs at a cap of 48/255 stay well under a 500 mA USB port. The firmware also passes this value to FastLED's power limiter. | Measure it (step 9). |
+| `current_cap_ma` | 300 | An estimate. 64 LEDs at a cap of 48/255 stay well under a 500 mA USB port. The brightness cap is what keeps the draw down; the firmware only reports this value. FastLED's power limiter is off, because its model (5050 LEDs) would dim bright frames below the cap. | Measure it (step 9). |
 | `button` | `false` | The board has a BOOT button on IO0 [2], but nothing reads it yet. #13 makes it Acknowledge and should then turn this field to `true`. | |
 | `imu` | `true` | QMI8658 on I2C: SDA IO11, SCL IO12, INT1 IO10, INT2 IO13 [2][3]. #13 uses it. | Certain |
 
@@ -137,7 +137,7 @@ On Linux, install the udev rule first (README, *Linux: serial port permissions*)
    - [ ] It keeps the Hardware Profile, Preferences and Themes, since `write_flash` touches only the app.
 9. **Brightness and heat.**
    - [ ] Hold a Takeover (`codino event --session a --state awaiting_input`, wait 2 min) at `codino set brightness 100` for 10 minutes. The board stays comfortable to touch, under about 50 °C on an IR thermometer.
-   - [ ] Repeat with a full-white Raw Mode frame: `codino show` a white PNG. The USB meter stays under `current_cap_ma` (300 mA) above the board's idle draw.
+   - [ ] Repeat with a full-white Raw Mode frame: `codino show` a white PNG. The USB meter stays under `current_cap_ma` (300 mA) above the board's idle draw. If it doesn't, lower `brightness_cap`, or set `current_cap_ma` to what you measured.
    - [ ] `codino set brightness 10` visibly dims everything, and dim states stay lit.
    - [ ] If the board runs hot, lower `brightness_cap` (and the fixture) as described above.
 10. **Persistence across reboot.**

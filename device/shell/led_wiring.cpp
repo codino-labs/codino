@@ -1,19 +1,15 @@
 #include "led_wiring.h"
 
+#include "hardware_profile.h"
+
 namespace device {
 
 LedWiring::LedWiring(const HardwareProfile& profile) : width_(profile.width), height_(profile.height), serpentine_(profile.serpentine) {
-  uint8_t channels[3];
-  bool seen[3] = {false, false, false};
-  if (profile.colorOrder.size() != 3) return;
+  if (!validColorOrder(profile.colorOrder)) return;
   for (size_t i = 0; i < 3; ++i) {
     const char letter = profile.colorOrder[i];
-    const int channel = letter == 'R' ? 0 : letter == 'G' ? 1 : letter == 'B' ? 2 : -1;
-    if (channel < 0 || seen[channel]) return;
-    seen[channel] = true;
-    channels[i] = static_cast<uint8_t>(channel);
+    channels_[i] = letter == 'R' ? 0 : letter == 'G' ? 1 : 2;
   }
-  for (size_t i = 0; i < 3; ++i) channels_[i] = channels[i];
 }
 
 void LedWiring::write(const PixelBuffer& shown, uint8_t* out) const {

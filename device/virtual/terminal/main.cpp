@@ -31,6 +31,7 @@
 #include <thread>
 
 #include "device_core.h"
+#include "hardware_profile.h"
 
 #if defined(__unix__) || defined(__APPLE__)
 #include <unistd.h>
@@ -92,22 +93,6 @@ void draw(const device::PixelBuffer& frame, const std::string& cause) {
   }
   std::fputs(out.c_str(), stderr);
   std::fflush(stderr);
-}
-
-// Defaults to the reference build (Waveshare ESP32-S3-Matrix, built-in 8x8),
-// the same Hardware Profile as protocol/fixtures/hello-reply.jsonl.
-device::HardwareProfile referenceProfile() {
-  device::HardwareProfile p;
-  p.width = 8;
-  p.height = 8;
-  p.dataPin = 14;
-  p.serpentine = false;
-  p.colorOrder = "RGB";
-  p.brightnessCap = 48;
-  p.currentCapMa = 300;
-  p.button = false;
-  p.imu = true;
-  return p;
 }
 
 // What the main loop handles: a protocol line from the Host on stdin, or the
@@ -257,7 +242,9 @@ bool parseLayout(const char* text, device::Layout& layout) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  device::HardwareProfile profile = referenceProfile();
+  // The reference build (Waveshare ESP32-S3-Matrix, built-in 8x8), the
+  // Hardware Profile of protocol/fixtures/hello-reply.jsonl.
+  device::HardwareProfile profile = device::referenceHardwareProfile();
   device::Preferences preferences;
   std::unique_ptr<FilePreferencesCache> cache;
   std::unique_ptr<DirectoryThemeStore> store;

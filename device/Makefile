@@ -1,7 +1,7 @@
 # Thin wrapper around CMake so the commands are easy to remember.
 BUILD := build
 
-.PHONY: all test update-goldens virtual-device web clean
+.PHONY: all test update-goldens virtual-device web firmware clean
 
 all: $(BUILD)/CMakeCache.txt
 	cmake --build $(BUILD) -j
@@ -63,5 +63,41 @@ $(WASI_SDK)/bin/clang++:
 	tar -xzf $(WASI_SDK).tar.gz -C $(TOOLCHAINS)
 	rm $(WASI_SDK).tar.gz
 
+# --- Firmware ----------------------------------------------------------------
+# The firmware shell for the reference board (firmware/, PlatformIO with the
+# Arduino core and FastLED), linking the Device core and the shell's portable
+# parts. The images land in $(FIRMWARE_OUT), for the web flasher; they are
+# build output, not committed. Flash them at the offsets in
+# docs/hardware/reference-board.md.
+#
+# Uses `pio` from PATH, or PIO=...; otherwise it installs a pinned PlatformIO
+# once into a venv under $(TOOLCHAINS), with its packages (the ESP32 platform,
+# toolchain and Arduino core, about 1 GB, downloaded on the first build) there
+# too. Nothing system-wide.
+PLATFORMIO_VERSION := 6.2.0
+PIO_HOME := $(TOOLCHAINS)/platformio
+PIO ?= $(or $(shell command -v pio 2>/dev/null),$(PIO_HOME)/venv/bin/pio)
+FIRMWARE_ENV := esp32s3
+FIRMWARE_OUT := $(BUILD)/firmware
+FIRMWARE_PIO_OUT := firmware/.pio/build/$(FIRMWARE_ENV)
+
+firmware: $(PIO)
+	$(PIO_ENV) $(PIO) run -d firmware -e $(FIRMWARE_ENV)
+	mkdir -p $(FIRMWARE_OUT)
+	cp $(FIRMWARE_PIO_OUT)/bootloader.bin $(FIRMWARE_PIO_OUT)/partitions.bin $(FIRMWARE_PIO_OUT)/firmware.bin $(FIRMWARE_OUT)/
+	$(PIO_ENV) $(PIO) pkg exec -p tool-esptoolpy -- esptool.py --chip esp32s3 merge_bin \
+		-o $(FIRMWARE_OUT)/firmware-merged.bin --flash_mode keep --flash_freq keep --flash_size keep \
+		0x0 $(FIRMWARE_OUT)/bootloader.bin 0x8000 $(FIRMWARE_OUT)/partitions.bin 0x10000 $(FIRMWARE_OUT)/firmware.bin
+	@echo "firmware images in $(FIRMWARE_OUT)"
+
+# Only when PlatformIO comes from here are its packages kept here too.
+ifeq ($(PIO),$(PIO_HOME)/venv/bin/pio)
+PIO_ENV := PLATFORMIO_CORE_DIR=$(PIO_HOME)/core
+$(PIO):
+	mkdir -p $(PIO_HOME)
+	python3 -m venv $(PIO_HOME)/venv
+	$(PIO_HOME)/venv/bin/pip install --quiet platformio==$(PLATFORMIO_VERSION)
+endif
+
 clean:
-	rm -rf $(BUILD)
+	rm -rf $(BUILD) firmware/.pio

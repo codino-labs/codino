@@ -16,7 +16,7 @@ Use a USB cable that carries data, not a charge-only one.
 
 You flash the firmware from a web page in Chrome or Edge, with no toolchain to install. Choose your board's Hardware Profile there; the reference board's is preselected.
 
-> **Coming soon.** The web flasher isn't published yet. This section will link to it when it is.
+> **Coming soon.** The web flasher isn't published yet. This section will link to it when it is. Until then you can build and flash the firmware yourself: see [docs/hardware/reference-board.md](docs/hardware/reference-board.md).
 
 ### 3. Plug in
 

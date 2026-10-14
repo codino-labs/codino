@@ -123,6 +123,8 @@ device/
   test/              native Device core tests (doctest); golden/: Theme snapshot golden frames
   virtual/terminal/  terminal Virtual Device (stdin/stdout protocol, matrix on stderr)
   virtual/browser/   browser Virtual Device: the core as wasm32-wasi with a C ABI, for the web UI
+  shell/             the firmware shell's portable parts (line framing, LED wiring, the stored Hardware Profile, flash stores)
+  firmware/          the firmware shell: PlatformIO project (Arduino core, FastLED) for ESP32-S3 boards
   third_party/       vendored single headers (ArduinoJson, doctest), see its README
 ```
 
@@ -136,7 +138,7 @@ A change is done when this exits 0 (needs `cmake` and a C++17 compiler):
 make -C device test
 ```
 
-Run a single test with `device/build/device_core_test -tc="*Aggregate State*"`.
+Run a single test with `device/build/device_core_test -tc="*Aggregate State*"`. A change to `device/core/`, `device/shell/` or `device/firmware/` must also build the firmware with `make -C device firmware` (the first run downloads PlatformIO and the ESP32 platform).
 
 The Layout (#10) is a Preference (`device::Preferences::layout`), adaptive by default; the terminal Virtual Device boots with `--layout aggregate` until a push says otherwise. One session, or the Aggregate Layout, shows the Aggregate State on the whole matrix; several get Tiles where their `tile` says (halves, quadrants, columns, then the Overflow Tile), each in its Project Color and animated by its Session State; a Takeover takes the whole matrix in either Layout. Layout tests assert on regions (`isFilled(frame, kTopLeft, kGreen)`, `isLitIn`, `column(i)`); multi-session tests about the Aggregate State use the `AggregateDevice8x8` fixture.
 
@@ -155,6 +157,8 @@ Themes (#12): per-state appearance is data, interpreted by the Device core (`the
 Preview (#15): `preview_enter` shows a lone session in a Session State (escalating from its `elapsed_ms`) in place of the sessions and Raw Mode, until `preview_exit`, Disconnected or `hello`; the sessions are swapped out while rendering (`previewed_`), not lost. A real session Awaiting Input pre-empts the preview as it pre-empts Raw Mode (ADR-0001), and the preview shows again after. Tests: `// --- Preview` in `device_core_test.cpp`.
 
 Browser build (#15): `make -C device web` builds the core with a pinned wasi-sdk (fetched once into `~/.cache/codino-toolchain`, SHA-256 checked; nothing system-wide) into `internal/webui/assets/device.wasm`, with the hashes of its sources in `device.wasm.sources`. With Node installed it then runs the new build against the protocol fixtures (`virtual/browser/check.mjs`). Both files are committed, so building the Go binary needs no C++ toolchain. After changing anything in `device/core/`, run `make -C device web` and commit the result: `go test ./internal/webui` fails while the committed build is stale.
+
+Firmware shell (#5): `device/firmware/` wraps the Device core for the reference board (Waveshare ESP32-S3-Matrix; its Hardware Profile, flash layout, USB setup and the manual checks are in `docs/hardware/reference-board.md`). `make -C device firmware` builds it with PlatformIO, from PATH or else pinned and installed once under `~/.cache/codino-toolchain/platformio/` (nothing system-wide), into `device/build/firmware/` (bootloader, partitions, app and a merged image for the web flasher; not committed). Its logic lives in portable code in `device/shell/`, built into the native tests, and only the hardware glue (`firmware/src/`: TinyUSB CDC, FastLED, LittleFS, the `hwprofile` partition) is Arduino code, which is verified by hand on the board, never by automated tests. The shell parts follow the core's portability rules: `LineReader` (serial bytes → protocol lines, frames byte for byte, a line over `DeviceCore::kMaxLineLength` dropped to its newline), `LedWiring` (the core's turned, capped frame → the bytes of the data line: serpentine rows, color order; rotation and the brightness cap are the core's), `parseHardwareProfile`/`hardwareProfileLine`/`referenceHardwareProfile` (the profile as stored: the `hardware_profile` object of a `hello_reply`, every field required) and `FilePreferencesCache`/`FileThemeStore` (the core's storage seams over a small `device::FileSystem`; LittleFS on the board, `InMemoryFileSystem` in `test/shell_test.cpp`, which tests them through `DeviceCore` across a "reboot"). The terminal Virtual Device boots with `referenceHardwareProfile()`. The firmware turns off the Arduino core's reboot into the bootloader on DTR/RTS or 1200 baud, so a Host opening the port never resets a Device; flashing again needs BOOT + RESET. Firmware warnings: `pio run -d device/firmware` should print none from `src/`, `core/` or `shell/`.
 
 The terminal Virtual Device renders every 100 ms even without input, so Disconnected shows 5 s after the Host goes silent:
 

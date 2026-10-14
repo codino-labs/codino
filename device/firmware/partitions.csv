@@ -1,0 +1,10 @@
+# Flash layout of the firmware (4 MB). The Hardware Profile partition holds
+# one line of JSON (the hardware_profile object of a hello_reply), so a web
+# flasher can write the chosen profile at its offset; the firmware stores
+# the reference one there when it is blank. Preferences and installed Themes
+# and Sprite Packs live in LittleFS.
+# Name,     Type, SubType, Offset,   Size
+nvs,        data, nvs,     0x9000,   0x5000
+factory,    app,  factory, 0x10000,  0x200000
+hwprofile,  data, 0x40,    0x210000, 0x1000
+littlefs,   data, spiffs,  0x211000, 0x1EF000

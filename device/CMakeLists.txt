@@ -16,11 +16,17 @@ add_library(device_core STATIC core/device_core.cpp core/device_core_themes.cpp 
 target_include_directories(device_core PUBLIC core)
 target_include_directories(device_core SYSTEM PUBLIC third_party)
 
+# The firmware shell's portable parts: line framing, LED wiring, the stored
+# Hardware Profile, flash stores. No Arduino or FastLED either.
+add_library(device_shell STATIC shell/flash_store.cpp shell/hardware_profile.cpp shell/led_wiring.cpp)
+target_include_directories(device_shell PUBLIC shell)
+target_link_libraries(device_shell PUBLIC device_core)
+
 # Native Device core tests (doctest).
 enable_testing()
 add_executable(device_core_test test/main.cpp test/device_core_test.cpp test/theme_test.cpp
-  test/theme_snapshot_test.cpp)
-target_link_libraries(device_core_test PRIVATE device_core)
+  test/theme_snapshot_test.cpp test/shell_test.cpp)
+target_link_libraries(device_core_test PRIVATE device_core device_shell)
 target_compile_definitions(device_core_test PRIVATE
   PROTOCOL_FIXTURES_DIR="${REPO_ROOT}/protocol/fixtures"
   GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/golden"
@@ -30,4 +36,4 @@ add_test(NAME device_core_test COMMAND device_core_test)
 # Terminal Virtual Device.
 add_executable(virtual-device virtual/terminal/main.cpp)
 find_package(Threads REQUIRED)
-target_link_libraries(virtual-device PRIVATE device_core Threads::Threads)
+target_link_libraries(virtual-device PRIVATE device_core device_shell Threads::Threads)

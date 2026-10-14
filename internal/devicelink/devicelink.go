@@ -26,6 +26,9 @@ const HandshakeTimeout = 2 * time.Second
 type Candidate struct {
 	Name string
 	Open func() (io.ReadWriteCloser, error)
+	// Refused, when set, is told that the candidate opened but answered
+	// hello with no valid hello_reply in this Host's protocol version.
+	Refused func()
 }
 
 // Discoverer lists the candidates to try, in order of preference.
@@ -75,7 +78,7 @@ func Claim(candidates []Candidate, now time.Time) (*Device, error) {
 	}
 	var failure error
 	for _, c := range candidates {
-		dev, err := handshake(c, now)
+		dev, err := open(c, now)
 		if err == nil {
 			return dev, nil
 		}
@@ -87,11 +90,21 @@ func Claim(candidates []Candidate, now time.Time) (*Device, error) {
 	return nil, failure
 }
 
-func handshake(c Candidate, now time.Time) (*Device, error) {
+// open opens a candidate and makes the handshake, telling it when it
+// refused.
+func open(c Candidate, now time.Time) (*Device, error) {
 	port, err := c.Open()
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", c.Name, err)
 	}
+	dev, err := handshake(c, port, now)
+	if err != nil && c.Refused != nil {
+		c.Refused()
+	}
+	return dev, err
+}
+
+func handshake(c Candidate, port io.ReadWriteCloser, now time.Time) (*Device, error) {
 	hello, err := protocol.Encode(protocol.NewHello(now.UnixMilli()))
 	if err != nil {
 		port.Close()

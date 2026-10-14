@@ -332,7 +332,7 @@ func runDaemon(paths daemon.Paths, args []string) error {
 	defer ln.Unlock() // after h.Close below: release the Device, then the lock
 
 	// The Device on a USB serial port, unless a Virtual Device is asked for.
-	var devices devicelink.Discoverer = devicelink.USBSerial{}
+	var devices devicelink.Discoverer = &devicelink.USBSerial{}
 	if *virtual != "" {
 		path, err := filepath.Abs(*virtual)
 		if err != nil {

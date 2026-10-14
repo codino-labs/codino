@@ -60,7 +60,7 @@ func TestADeviceOnASerialPortIsClaimed(t *testing.T) {
 			device.Write(fixtureLine(t, "hello-reply.jsonl"))
 		}
 	}()
-	dev, err := Claim(USBSerial{list: func() []string { return []string{port} }}.Candidates(), time.UnixMilli(1760432400000))
+	dev, err := Claim((&USBSerial{list: func() []string { return []string{port} }}).Candidates(), time.UnixMilli(1760432400000))
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}

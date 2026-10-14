@@ -14,8 +14,6 @@ const (
 func setSpeed(t *unix.Termios) {
 	t.Cflag &^= unix.CBAUD
 	t.Cflag |= unix.B115200
-	t.Ispeed = unix.B115200
-	t.Ospeed = unix.B115200
 }
 
 // permissionHint is what a user who may not open a port needs to know.

@@ -37,7 +37,8 @@ func DefaultPaths(name string) Paths {
 }
 
 // ensureDir creates the directory owner-only, and refuses one that another
-// user owns or that others can access.
+// user owns or that others can access (on Windows: one that is a link; the
+// profile's ACL keeps the directory to the user).
 func (p Paths) ensureDir() error {
 	if err := os.MkdirAll(p.Dir, 0o700); err != nil {
 		return fmt.Errorf("runtime directory: %w", err)

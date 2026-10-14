@@ -23,6 +23,11 @@ func Started(pid int) uint64 {
 	if !ok {
 		return 0
 	}
+	return startTime(k)
+}
+
+// startTime is when the process started, in microseconds since the epoch.
+func startTime(k *unix.KinfoProc) uint64 {
 	t := k.Proc.P_starttime
 	return uint64(t.Sec)*1_000_000 + uint64(t.Usec)
 }
@@ -44,6 +49,5 @@ func gone(pid int, started uint64) bool {
 	if k.Proc.P_stat == szomb {
 		return true
 	}
-	t := k.Proc.P_starttime
-	return started != 0 && uint64(t.Sec)*1_000_000+uint64(t.Usec) != started
+	return started != 0 && startTime(k) != started
 }

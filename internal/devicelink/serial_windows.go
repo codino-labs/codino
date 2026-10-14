@@ -84,7 +84,7 @@ func openSerial(name string) (io.ReadWriteCloser, error) {
 		windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OVERLAPPED, 0)
 	if err != nil {
 		if errors.Is(err, windows.ERROR_ACCESS_DENIED) {
-			return nil, fmt.Errorf("open %s: in use by another program", name)
+			return nil, fmt.Errorf("open %s: in use by another program: %w", name, err)
 		}
 		return nil, &os.PathError{Op: "open", Path: name, Err: err}
 	}

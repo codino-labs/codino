@@ -20,7 +20,7 @@ You flash the firmware from a web page in Chrome or Edge, with no toolchain to i
 
 ### 3. Plug in
 
-Plug the board into any USB port. The Host finds it on its own, and only a board that answers Codino's handshake is claimed, so your other boards are left alone.
+Plug the board into any USB port. The Host finds it on its own, and only a board that answers Codino's handshake is claimed. Another board that doesn't answer the handshake is left alone until you replug it, or for a minute.
 
 - **Linux**: your user needs permission to open the board's serial port. See [Linux: serial port permissions](#linux-serial-port-permissions).
 - **macOS**: nothing to do. The board shows up as `/dev/cu.usbmodem…`.

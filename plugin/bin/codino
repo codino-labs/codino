@@ -1,0 +1,40 @@
+#!/bin/sh
+# Runs the codino binary built for this OS and CPU, which sits next to this
+# script as codino-<os>-<arch>[.exe] (`make plugin-all`). Claude Code runs
+# hook commands through sh on Linux and macOS and Git Bash on Windows, and
+# puts bin/ on the Bash tool's PATH, so this one script serves every OS.
+#
+# A hook never fails: when there is no binary for this machine, `codino hook`
+# says so on stderr and exits 0, so the Agent Session goes on.
+
+self=$0
+# Follow symlinks (codino linked onto a PATH) to the plugin's bin/.
+while [ -L "$self" ]; do
+	link=$(readlink "$self")
+	case $link in
+	/*) self=$link ;;
+	*) self=$(dirname -- "$self")/$link ;;
+	esac
+done
+dir=$(dirname -- "$self")
+
+ext=
+case $(uname -s) in
+Linux) os=linux ;;
+Darwin) os=darwin ;;
+MINGW* | MSYS* | CYGWIN*) os=windows ext=.exe ;;
+*) os=$(uname -s) ;;
+esac
+case $(uname -m) in
+x86_64 | amd64) arch=amd64 ;;
+aarch64 | arm64) arch=arm64 ;;
+*) arch=$(uname -m) ;;
+esac
+
+binary=$dir/codino-$os-$arch$ext
+if [ ! -x "$binary" ]; then
+	echo "codino: no codino binary for $os/$arch in $dir" >&2
+	[ "$1" = hook ] && exit 0
+	exit 1
+fi
+exec "$binary" "$@"

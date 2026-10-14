@@ -219,10 +219,9 @@ func (c Client) open(ctx context.Context, req Request, spawn func() error) (net.
 // the request keeps the connection open (OpShow), so nothing is lost to the
 // buffered reader.
 func (c Client) roundTrip(ctx context.Context, req Request) (net.Conn, Response, error) {
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "unix", c.Paths.Socket)
+	conn, err := dialSocket(ctx, c.Paths.Socket)
 	if err != nil {
-		return nil, Response{}, fmt.Errorf("%w: %w", errUnavailable, err)
+		return nil, Response{}, err
 	}
 	resp, err := exchange(ctx, conn, req)
 	if err != nil {
@@ -269,11 +268,13 @@ func SpawnCommand(paths Paths, executable string, args ...string) func() error {
 			return fmt.Errorf("daemon log: %w", err)
 		}
 		defer log.Close()
-		cmd := exec.Command(executable, args...)
-		cmd.Stdout = log
-		cmd.Stderr = log
-		detach(cmd)
-		if err := cmd.Start(); err != nil {
+		cmd, err := startDetached(func() *exec.Cmd {
+			cmd := exec.Command(executable, args...)
+			cmd.Stdout = log
+			cmd.Stderr = log
+			return cmd
+		})
+		if err != nil {
 			return fmt.Errorf("start %s: %w", executable, err)
 		}
 		return cmd.Process.Release()

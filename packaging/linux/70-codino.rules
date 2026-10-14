@@ -1,0 +1,16 @@
+# Codino: lets the user logged in at the seat open a Device's USB serial port
+# (no dialout group needed), and keeps ModemManager from probing it.
+#
+# A Device is an ESP32 board with native USB: Espressif's vendor id, 303a.
+# The rule covers every such board, as the Host only claims the one that
+# answers its handshake.
+#
+# Install:
+#   sudo cp 70-codino.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+# then unplug and replug the Device.
+#
+# The number matters: uaccess must be tagged before 73-seat-late.rules, and
+# ID_MM_DEVICE_IGNORE set before ModemManager's 77-mm-*.rules.
+
+SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"

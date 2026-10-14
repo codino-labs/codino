@@ -71,7 +71,8 @@ func forwardHook(paths daemon.Paths, stdin io.Reader, receivedAt time.Time) erro
 
 // claudePID is the Claude Code process that runs the hook: CLAUDE_PID, set
 // by Claude Code though undocumented, or else the hook's grandparent (hook →
-// sh → claude), where /proc shows it. 0 when neither is known: the session
+// sh → claude), where the OS shows it (Linux, macOS; not Windows, where Git
+// Bash sits in between). 0 when neither is known: the session
 // is then never reaped, only returned to Idle when stale.
 func claudePID() int {
 	if pid, err := strconv.Atoi(os.Getenv("CLAUDE_PID")); err == nil && pid > 0 {

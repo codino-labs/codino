@@ -2,9 +2,9 @@
 // candidate transports, performs the handshake, and claims a Device only after
 // a valid hello_reply.
 //
-// Where candidates come from is the Discoverer's job. VirtualDevice spawns the
-// terminal Virtual Device; real USB serial discovery plugs in as another
-// Discoverer.
+// Where candidates come from is the Discoverer's job. USBSerial lists the USB
+// serial ports a Device may be on; VirtualDevice spawns the terminal Virtual
+// Device.
 package devicelink
 
 import (

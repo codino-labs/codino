@@ -1,0 +1,9 @@
+# Per-OS packaging: a sh launcher, a named pipe, serial through x/sys
+
+The plugin carries one pure-Go binary per OS and CPU (`bin/codino-<os>-<arch>[.exe]`) and a POSIX sh launcher, `bin/codino`, that picks one with `uname`. The hooks stay shell-form commands that run the launcher. Claude Code runs shell-form hooks through `sh` on Linux and macOS and through Git Bash on Windows, so the same command works everywhere. Codino on Windows therefore needs Git for Windows, as Claude Code's Bash tool does. We rejected exec-form hooks: on Windows they need `command` to resolve to a real `.exe`, so one `command` can't serve every OS. We also rejected PowerShell hooks, because their syntax can't share a command with sh.
+
+On Windows the local socket is a named pipe with an SDDL that makes the user its owner and gives a protected DACL with one entry, for that user. We use `github.com/Microsoft/go-winio` for it, the library Docker and containerd use. The standard library has no named pipes, and a `net.Listener` with deadlines, half-close and a security descriptor is a lot to write by hand. Clients refuse a pipe that another user owns.
+
+Serial ports are opened with `golang.org/x/sys` (termios on Unix, DCB on Windows) as `*os.File`s under the runtime poller. That gives write deadlines, and `Close` ends a pending read. go-winio already requires that module. We rejected `go.bug.st/serial`: on macOS its USB enumerator needs cgo, and its ports take no deadlines. Discovery reads the USB vendor from sysfs or the registry. On macOS that would need IOKit through cgo, so there every `cu.usbmodem*` port is a candidate and the handshake decides.
+
+The Host's persistent state lives in `$CLAUDE_PLUGIN_DATA`, which a hook-spawned Host Daemon inherits. A daemon started outside Claude Code uses `<user cache dir>/codino` instead.

@@ -8,10 +8,13 @@
 //
 //   - Linux: /proc gives the start time, the parent, and zombies (a
 //     kill -9'd Agent whose shell hasn't waited for it yet).
-//   - Other Unix (macOS): signal 0 only, as no start time is readable without
-//     cgo or a sysctl dependency; a reused pid keeps the session until the
+//   - macOS: the kern.proc.pid sysctl (golang.org/x/sys/unix, no cgo) gives
+//     the start time, the parent and zombies.
+//   - Other Unix: signal 0 only; a reused pid keeps the session until the
 //     Host's staleness fallback or the next SessionEnd.
-//   - Windows: not probed yet; sessions are never reaped there.
+//   - Windows: OpenProcess, the exit code and the creation time. No parent:
+//     the hook's grandparent is a Git Bash process, so only CLAUDE_PID names
+//     the Agent.
 package liveness
 
 // Probe implements host.LivenessProbe for the processes of this Host.

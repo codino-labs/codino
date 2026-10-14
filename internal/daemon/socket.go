@@ -33,8 +33,9 @@ type Listener struct {
 	lock *os.File
 }
 
-// Listen takes the daemon lock and opens the Unix socket with owner-only
-// permissions. It fails with ErrAlreadyRunning when a daemon already runs.
+// Listen takes the daemon lock and opens the local socket: a Unix socket with
+// owner-only permissions, or on Windows a named pipe only this user can open.
+// It fails with ErrAlreadyRunning when a daemon already runs.
 func Listen(paths Paths) (*Listener, error) {
 	if err := paths.ensureDir(); err != nil {
 		return nil, err
@@ -43,21 +44,10 @@ func Listen(paths Paths) (*Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Holding the lock, any socket file left over is stale.
-	if err := os.Remove(paths.Socket); err != nil && !errors.Is(err, os.ErrNotExist) {
-		lock.Close()
-		return nil, fmt.Errorf("remove stale socket: %w", err)
-	}
-	ln, err := net.Listen("unix", paths.Socket)
+	ln, err := listenSocket(paths.Socket)
 	if err != nil {
 		lock.Close()
-		return nil, fmt.Errorf("listen: %w", err)
-	}
-	// The directory is already owner-only; the socket is too, in case it moves.
-	if err := os.Chmod(paths.Socket, 0o600); err != nil {
-		ln.Close()
-		lock.Close()
-		return nil, fmt.Errorf("socket permissions: %w", err)
+		return nil, err
 	}
 	return &Listener{Listener: ln, lock: lock}, nil
 }

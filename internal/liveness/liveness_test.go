@@ -14,7 +14,7 @@ import (
 func startAgent(t *testing.T) *exec.Cmd {
 	t.Helper()
 	if runtime.GOOS == "windows" {
-		t.Skip("liveness is not probed on Windows yet")
+		t.Skip("the stand-in Agent is sleep(1), which Windows lacks")
 	}
 	cmd := exec.Command("sleep", "60")
 	if err := cmd.Start(); err != nil {
@@ -23,6 +23,9 @@ func startAgent(t *testing.T) *exec.Cmd {
 	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
 	return cmd
 }
+
+// readsProcesses is whether this OS reads start times, parents and zombies.
+func readsProcesses() bool { return runtime.GOOS == "linux" || runtime.GOOS == "darwin" }
 
 func TestAgentThatIsAliveIsNotGone(t *testing.T) {
 	cmd := startAgent(t)
@@ -50,8 +53,8 @@ func TestAgentKilledIsGone(t *testing.T) {
 
 func TestAgentKilledButNotYetWaitedForIsGone(t *testing.T) {
 	// kill -9 leaves a zombie until the terminal's shell waits for it.
-	if runtime.GOOS != "linux" {
-		t.Skip("zombies are told apart through /proc")
+	if !readsProcesses() {
+		t.Skip("zombies are told apart through /proc or sysctl")
 	}
 	cmd := startAgent(t)
 	pid := cmd.Process.Pid
@@ -66,8 +69,8 @@ func TestAgentKilledButNotYetWaitedForIsGone(t *testing.T) {
 }
 
 func TestReusedPIDIsGone(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("start times are read through /proc")
+	if !readsProcesses() {
+		t.Skip("start times are read through /proc or sysctl")
 	}
 	pid := os.Getpid()
 	started := liveness.Started(pid)
@@ -87,8 +90,8 @@ func TestUnknownPIDIsNeverGone(t *testing.T) {
 }
 
 func TestParentOfThisProcess(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("parents are read through /proc")
+	if !readsProcesses() {
+		t.Skip("parents are read through /proc or sysctl")
 	}
 	if got, want := liveness.Parent(os.Getpid()), os.Getppid(); got != want {
 		t.Fatalf("Parent = %d, want %d", got, want)

@@ -13,7 +13,7 @@ import (
 // directory.
 type Paths struct {
 	Dir    string
-	Socket string // the Unix socket clients connect to
+	Socket string // the local socket clients connect to: a Unix socket, or a named pipe on Windows
 	Lock   string // held by the running daemon, so only one runs
 	Log    string // the spawned daemon's stdout and stderr
 }
@@ -22,20 +22,18 @@ type Paths struct {
 func PathsIn(dir string) Paths {
 	return Paths{
 		Dir:    dir,
-		Socket: filepath.Join(dir, "host.sock"),
+		Socket: socketPath(dir),
 		Lock:   filepath.Join(dir, "host.lock"),
 		Log:    filepath.Join(dir, "host.log"),
 	}
 }
 
-// DefaultPaths puts the daemon files in the user's runtime directory
-// ($XDG_RUNTIME_DIR/<name>), or in a per-user directory under the system
-// temporary directory when there is none.
+// DefaultPaths puts the daemon files in the user's runtime directory:
+// $XDG_RUNTIME_DIR/<name>, or a per-user directory under the system
+// temporary directory when there is none; on Windows
+// %LocalAppData%\<name>\run, inside the user's profile.
 func DefaultPaths(name string) Paths {
-	if runtime := os.Getenv("XDG_RUNTIME_DIR"); runtime != "" {
-		return PathsIn(filepath.Join(runtime, name))
-	}
-	return PathsIn(filepath.Join(os.TempDir(), fmt.Sprintf("%s-%d", name, os.Getuid())))
+	return PathsIn(runtimeDir(name))
 }
 
 // ensureDir creates the directory owner-only, and refuses one that another

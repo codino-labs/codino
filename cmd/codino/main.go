@@ -331,9 +331,8 @@ func runDaemon(paths daemon.Paths, args []string) error {
 	}
 	defer ln.Unlock() // after h.Close below: release the Device, then the lock
 
-	// Real USB serial discovery is not built yet: without a Virtual Device the
-	// daemon tracks sessions but drives no Device.
-	var devices devicelink.Discoverer = devicelink.NoDevices
+	// The Device on a USB serial port, unless a Virtual Device is asked for.
+	var devices devicelink.Discoverer = devicelink.USBSerial{}
 	if *virtual != "" {
 		path, err := filepath.Abs(*virtual)
 		if err != nil {
@@ -350,10 +349,11 @@ func runDaemon(paths daemon.Paths, args []string) error {
 	if err != nil {
 		return err
 	}
-	copies, err := newThemeCopies()
+	state, err := stateDir()
 	if err != nil {
 		return err
 	}
+	copies := themeCopies{dir: filepath.Join(state, "themes")}
 	h := host.New(systemClock{}, devices, host.WithExitGrace(exitGrace), host.WithPreferences(prefsFile),
 		host.WithTranscriptProbe(claudecode.Transcripts{}), host.WithLivenessProbe(liveness.Probe{}),
 		host.WithProjectRoots(gitrepo.Roots{}), host.WithThemeCopies(copies))
@@ -364,7 +364,7 @@ func runDaemon(paths daemon.Paths, args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	slog.Info("Host Daemon listening", "socket", paths.Socket, "virtual_device", *virtual, "exit_grace", exitGrace,
-		"preferences", prefsFile.Path)
+		"preferences", prefsFile.Path, "state", state)
 	if err := daemon.Run(ctx, ln, h, daemon.WithUI(webUI)); err != nil {
 		return err
 	}

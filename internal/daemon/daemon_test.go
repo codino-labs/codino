@@ -8,6 +8,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -39,6 +40,15 @@ func serve(t *testing.T, ln *daemon.Listener) {
 	})
 }
 
+// unixOnly skips a test of Unix file modes: on Windows the pipe's ACL is
+// the access control (pipe_test.go).
+func unixOnly(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix file modes")
+	}
+}
+
 func listen(t *testing.T, paths daemon.Paths) *daemon.Listener {
 	t.Helper()
 	ln, err := daemon.Listen(paths)
@@ -49,6 +59,7 @@ func listen(t *testing.T, paths daemon.Paths) *daemon.Listener {
 }
 
 func TestTheSocketIsOwnerOnly(t *testing.T) {
+	unixOnly(t)
 	paths := daemon.PathsIn(filepath.Join(t.TempDir(), "rt"))
 	ln := listen(t, paths)
 	defer ln.Unlock()
@@ -65,6 +76,7 @@ func TestTheSocketIsOwnerOnly(t *testing.T) {
 }
 
 func TestARuntimeDirectoryOthersCanReadIsRefused(t *testing.T) {
+	unixOnly(t)
 	dir := filepath.Join(t.TempDir(), "rt")
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		t.Fatal(err)

@@ -1,0 +1,14 @@
+{
+  "name": "codino",
+  "description": "Codino: a USB LED matrix that shows the state of your Claude Code sessions.",
+  "owner": {
+    "name": "Roberto Gallea"
+  },
+  "plugins": [
+    {
+      "name": "codino",
+      "source": "./plugin",
+      "description": "Shows the state of your Claude Code sessions on a Codino USB LED matrix."
+    }
+  ]
+}

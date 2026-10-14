@@ -87,18 +87,10 @@ func openBrowser(paths daemon.Paths, url string) error {
 
 // themeCopies keeps a copy of each Theme and Sprite Pack the Host Daemon
 // installed on the Device, as its install line, in
-// <user cache dir>/codino/themes/<kind>/<name>.jsonl: the Device's flash is
-// canonical and can't be read back, so the web UI's preview renders these.
-// A lost copy only means the preview shows "default" for that Theme.
+// <state dir>/themes/<kind>/<name>.jsonl: the Device's flash is canonical and
+// can't be read back, so the web UI's preview renders these. A lost copy only
+// means the preview shows "default" for that Theme.
 type themeCopies struct{ dir string }
-
-func newThemeCopies() (themeCopies, error) {
-	cache, err := os.UserCacheDir()
-	if err != nil {
-		return themeCopies{}, fmt.Errorf("theme copies: %w", err)
-	}
-	return themeCopies{dir: filepath.Join(cache, name, "themes")}, nil
-}
 
 func (c themeCopies) path(kind protocol.Kind, name string) string {
 	return filepath.Join(c.dir, string(kind), name+".jsonl")

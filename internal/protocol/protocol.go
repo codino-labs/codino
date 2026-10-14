@@ -117,6 +117,12 @@ type PreviewEnter struct {
 	ElapsedMS int64  `json:"elapsed_ms"`
 }
 
+// Goodbye is the Host Daemon exiting cleanly (Host → Device): the Device
+// goes dark instead of showing Disconnected, until the next hello.
+type Goodbye struct {
+	Type string `json:"type"`
+}
+
 // PreviewExit returns the Device to its sessions (or Raw Mode).
 type PreviewExit struct {
 	Type string `json:"type"`
@@ -181,6 +187,9 @@ func NewPreviewEnter(state string, elapsedMS int64) PreviewEnter {
 }
 
 func NewPreviewExit() PreviewExit { return PreviewExit{Type: "preview_exit"} }
+
+// NewGoodbye makes the Host Daemon's last message before it exits cleanly.
+func NewGoodbye() Goodbye { return Goodbye{Type: "goodbye"} }
 
 // Encode renders a message as one protocol line, newline included.
 func Encode(msg any) ([]byte, error) {

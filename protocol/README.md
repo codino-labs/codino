@@ -2,7 +2,7 @@
 
 The wire protocol between the Host Daemon and a Device (or a Virtual Device). It is semantic (ADR-0001): the Host says what state each Agent Session is in, and the Device decides how that looks.
 
-v0 covers the handshake, session upsert, session remove, heartbeat, acknowledge, Disconnected, Raw Mode, the preview-state override, the Preferences push and installing Themes and Sprite Packs. The Theme and Sprite Pack format is in [themes.md](themes.md).
+v0 covers the handshake, session upsert, session remove, heartbeat, acknowledge, Disconnected, goodbye, Raw Mode, the preview-state override, the Preferences push and installing Themes and Sprite Packs. The Theme and Sprite Pack format is in [themes.md](themes.md).
 
 ## Framing
 
@@ -110,13 +110,17 @@ Done decay is the Host's: the Session Tracker returns a session that stayed Done
 
 ## Disconnected
 
-Every message the Device can use (`hello`, `heartbeat`, a valid `session_upsert`, `session_remove`, `acknowledge` or `preferences`, `raw_mode_enter`, `raw_mode_exit`, a Raw Mode frame it shows, a valid `preview_enter`, `preview_exit`, an `install` or `uninstall` it answers) tells it the Host is alive; lines it ignores don't. When nothing usable has arrived for the Disconnected timeout, the Device shows Disconnected. It counts from boot too, so a Device that never heard from a Host shows it as well.
+Every message the Device can use (`hello`, `heartbeat`, `goodbye`, a valid `session_upsert`, `session_remove`, `acknowledge` or `preferences`, `raw_mode_enter`, `raw_mode_exit`, a Raw Mode frame it shows, a valid `preview_enter`, `preview_exit`, an `install` or `uninstall` it answers) tells it the Host is alive; lines it ignores don't. When nothing usable has arrived for the Disconnected timeout, the Device shows Disconnected. It counts from boot too, so a Device that never heard from a Host shows it as well.
 
 - The timeout is a Preference (`disconnected_timeout_ms`, 5 seconds by default), which a Device boots with from its cache, so it applies before any Host connects.
 - Disconnected is not a Session State. It hides the sessions, because the Device no longer knows their state, and it never looks like Idle: v0 draws a dim diagonal line on a dark matrix. It shows in Quiet Mode too.
 - The next usable message ends it. A heartbeat brings back the sessions the Device holds; a `hello` replaces them.
 - Disconnected ends Raw Mode (above) and the preview (below).
-- A Host Daemon that exits stops the heartbeats too, so the Device shows Disconnected until the next Host Daemon says `hello`.
+- A Host Daemon that exits without a word (it crashed, was killed, or the laptop slept) stops the heartbeats too, so the Device shows Disconnected until the next Host Daemon says `hello`. One that exits cleanly says `goodbye` first (below).
+
+### `goodbye` (Host → Device)
+
+No other field. The Host Daemon's last message when it exits cleanly: after its exit grace with no sessions, or when stopped (Ctrl-C, SIGTERM). The Device forgets every session, ends Raw Mode and the preview, and goes dark: the Host's silence from then on is no Disconnected, because the Host said it was leaving. Any usable message ends it (the Disconnected timeout counts again from that message); the next Host Daemon's `hello` resumes as usual.
 
 ## Raw Mode (Host → Device)
 
@@ -284,5 +288,6 @@ The Device answers every `install` and `uninstall` with one, which also counts a
 | `uninstall.jsonl` | Host → Device: uninstall the Theme `ember` |
 | `preview-enter.jsonl` | Host → Device: preview Awaiting Input 2 min 30 s in, a Takeover by the default Escalation |
 | `preview-exit.jsonl` | Host → Device |
+| `goodbye.jsonl` | Host → Device |
 
 A change to the protocol changes the fixtures in the same commit.

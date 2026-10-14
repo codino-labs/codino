@@ -92,7 +92,7 @@ tail -f "$XDG_RUNTIME_DIR/codino/host.log"
 
 The socket, lock and log live in `$XDG_RUNTIME_DIR/codino/` (owner-only), or `$TMPDIR/codino-<uid>/` when `XDG_RUNTIME_DIR` is unset; on Windows in `%LocalAppData%\codino\run\`, with a named pipe for the socket.
 
-The daemon exits after 5 minutes with no Agent Sessions (`--exit-grace`, or `CODINO_EXIT_GRACE=10s` so a spawned daemon inherits it); the next `codino event` spawns a new one. An exiting daemon refuses events with a `retiring` reply, so the client spawns the next daemon instead of losing them, and a new daemon waits for the old one to release the lock. Stop it early with Ctrl-C or `pkill -f 'codino daemon'`.
+The daemon exits after 5 minutes with no Agent Sessions (`--exit-grace`, or `CODINO_EXIT_GRACE=10s` so a spawned daemon inherits it); the next `codino event` spawns a new one. On a clean exit (the exit grace, Ctrl-C, SIGTERM) `Host.Close` sends the Device `goodbye`, so it goes dark rather than show Disconnected, which stays for a daemon that dies without a word. An exiting daemon refuses events with a `retiring` reply, so the client spawns the next daemon instead of losing them, and a new daemon waits for the old one to release the lock. Stop it early with Ctrl-C or `pkill -f 'codino daemon'`.
 
 ### Claude Code plugin
 

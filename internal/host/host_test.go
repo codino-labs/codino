@@ -626,3 +626,39 @@ func TestClosingAHungDeviceDoesNotHoldUpTheHost(t *testing.T) {
 		})
 	}
 }
+
+func TestARetiringHostSaysGoodbyeToTheDevice(t *testing.T) {
+	// The Device goes dark rather than show Disconnected for a Host Daemon
+	// that exited on purpose.
+	clock := clockAt(1760432400000)
+	dev := newReferenceDevice(t)
+	h := host.New(clock, devices(dev), host.WithExitGrace(time.Minute))
+	h.Tick()
+	clock.Advance(time.Minute)
+	h.Tick()
+	if !retired(h) {
+		t.Fatal("not retired after the exit grace")
+	}
+
+	h.Close() // the Host Daemon exits
+
+	got := dev.Received()
+	if last := got[len(got)-1]; last != fixture(t, "goodbye.jsonl") {
+		t.Errorf("last line to the Device %q, want the goodbye fixture", last)
+	}
+}
+
+func TestAHostShutDownCleanlySaysGoodbyeLast(t *testing.T) {
+	clock := clockAt(1760432400000)
+	dev := newReferenceDevice(t)
+	h := host.New(clock, devices(dev))
+	h.Tick()
+	apply(t, h, host.Event{SessionID: "a", State: host.Working})
+	sent := len(dev.Received())
+
+	h.Close() // Ctrl-C or SIGTERM
+	clock.Advance(time.Minute)
+	h.Tick()
+
+	assertLines(t, since(dev, sent), []string{fixture(t, "goodbye.jsonl")})
+}

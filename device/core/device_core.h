@@ -286,6 +286,9 @@ class DeviceCore {
   // Latched once the timeout passes, until the next Host message, so a
   // silence longer than the millis() wrap (~49.7 days) never ends it.
   bool disconnected_ = false;
+  // The Host said goodbye (it exited cleanly): its silence is no
+  // Disconnected, until any usable message ends it.
+  bool saidGoodbye_ = false;
 };
 
 }  // namespace device

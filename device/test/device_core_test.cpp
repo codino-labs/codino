@@ -1735,3 +1735,40 @@ TEST_CASE_FIXTURE(Device8x8, "a preview entered while a session is Awaiting Inpu
   core.receive(R"({"type":"session_remove","id":"s1"})");
   CHECK(isFilled(core.render(), {0, 0, 8, 8}, kAwaitingInputOrange));
 }
+
+// --- Goodbye (a Host Daemon exiting cleanly) --------------------------------
+
+TEST_CASE_FIXTURE(Device8x8, "a goodbye darkens the matrix, and no Disconnected follows the Host's silence") {
+  core.receive(upsert("s1", "working"));
+
+  CHECK(core.receive(fixture("goodbye.jsonl")).empty());
+  CHECK(core.render() == device::PixelBuffer(8, 8));
+
+  for (int i = 0; i < 10; ++i) {
+    clock.advance(kTimeout);
+    CHECK(core.render() == device::PixelBuffer(8, 8));
+  }
+}
+
+TEST_CASE_FIXTURE(Device8x8, "a goodbye ends Raw Mode and the preview") {
+  core.receive(fixture("raw-mode-enter.jsonl"));
+  core.receive(fixture("raw-frame.bin"));
+  core.receive(previewEnter("done"));
+
+  core.receive(fixture("goodbye.jsonl"));
+
+  CHECK(core.render() == device::PixelBuffer(8, 8));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "a hello after a goodbye resumes as usual, Disconnected included") {
+  core.receive(upsert("s1", "error"));
+  core.receive(fixture("goodbye.jsonl"));
+  clock.advance(kTimeout);
+
+  CHECK_FALSE(core.receive(fixture("hello.jsonl")).empty());
+  core.receive(upsert("s2", "working"));
+  CHECK(core.render() == loneSessionFrame("working"));
+
+  clock.advance(kTimeout);
+  CHECK(core.render() == disconnectedFrame({"working"}));
+}

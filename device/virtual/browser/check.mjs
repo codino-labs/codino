@@ -35,4 +35,9 @@ for (let i = 0; i < pixels.length; i += 3) {
 }
 receive(fixture("preview-exit.jsonl"));
 if (frame().some((c) => c !== 0)) fail("preview-exit.jsonl: still lit");
+receive(fixture("session-upsert.jsonl"));
+if (!frame().some((c) => c !== 0)) fail("session-upsert.jsonl: dark");
+receive(fixture("goodbye.jsonl"));
+vd.vd_set_millis(1000 + 60000); // a minute of silence: dark, not Disconnected
+if (frame().some((c) => c !== 0)) fail("goodbye.jsonl: still lit");
 console.log("browser Virtual Device: OK against the protocol fixtures");

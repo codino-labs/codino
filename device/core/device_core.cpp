@@ -270,6 +270,15 @@ std::string DeviceCore::receive(std::string_view line) {
     preview_ = true;
   } else if (type == "preview_exit") {
     preview_ = false;
+  } else if (type == "goodbye") {
+    // The Host Daemon exits cleanly: nothing is left to show, and its
+    // silence from now on is no Disconnected. A hello starts over.
+    sessions_.clear();
+    rawMode_ = false;
+    preview_ = false;
+    hostMessage();
+    saidGoodbye_ = true;
+    return {};
   } else if (type == "install") {
     hostMessage();
     return install(message.as<JsonVariantConst>());
@@ -364,6 +373,7 @@ SessionState DeviceCore::aggregateState() const {
 
 // Unsigned subtraction keeps working when millis() wraps (every ~49.7 days).
 bool DeviceCore::disconnected() {
+  if (saidGoodbye_) return false;
   if (clock_.millis() - lastHostMessage_ >= preferences_.disconnectedTimeoutMs) {
     // The Host that streamed the pixels, or asked for a preview, is gone:
     // Raw Mode and the preview end with it.
@@ -377,6 +387,7 @@ bool DeviceCore::disconnected() {
 void DeviceCore::hostMessage() {
   lastHostMessage_ = clock_.millis();
   disconnected_ = false;
+  saidGoodbye_ = false;
 }
 
 // Disconnected is not a Session State: a dim slash across an otherwise dark

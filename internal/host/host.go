@@ -537,15 +537,22 @@ func upsert(s *session) protocol.SessionUpsert {
 	return protocol.NewSessionUpsert(s.id, string(s.state), s.projectColor, s.stateEntered.UnixMilli(), s.tile)
 }
 
-// Close releases the Device; the Host claims no other afterwards.
+// Close says goodbye to the Device and releases it; the Host claims no other
+// afterwards. The Host Daemon closes the Host when it exits cleanly (its exit
+// grace over, or stopped), so the Device goes dark rather than show
+// Disconnected, which stays for a Host gone silent without a word.
 func (h *Host) Close() {
 	h.mu.Lock()
 	defer h.unlock()
+	if h.closed {
+		return
+	}
 	h.closed = true
 	if h.showing != nil {
 		h.showing.end()
 		h.showing = nil
 	}
+	h.send(protocol.NewGoodbye())
 	if h.device != nil {
 		h.drop()
 	}

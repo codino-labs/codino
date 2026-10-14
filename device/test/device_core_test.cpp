@@ -1711,3 +1711,27 @@ TEST_CASE_FIXTURE(Device8x8, "a preview the Device cannot use is ignored") {
     CHECK(core.render() == loneSessionFrame("working"));
   }
 }
+
+TEST_CASE_FIXTURE(Device8x8, "a real session Awaiting Input pre-empts the preview, and the preview shows again after") {
+  core.receive(upsert("s1", "working"));
+  core.receive(previewEnter("done"));
+
+  core.receive(upsert("s1", "awaiting_input"));
+  CHECK(core.render() == awaitingInputFor(0));
+
+  advanceWithHeartbeats(core, clock, 40 * kSecond);
+  CHECK(core.render() == awaitingInputFor(40 * kSecond));
+
+  core.receive(upsert("s1", "working"));
+  CHECK(core.render() == loneSessionFrame("done"));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "a preview entered while a session is Awaiting Input waits for it") {
+  core.receive(upsert("s1", "awaiting_input"));
+
+  core.receive(fixture("preview-enter.jsonl"));
+  CHECK(core.render() == awaitingInputFor(0));
+
+  core.receive(R"({"type":"session_remove","id":"s1"})");
+  CHECK(isFilled(core.render(), {0, 0, 8, 8}, kAwaitingInputOrange));
+}

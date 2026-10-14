@@ -185,6 +185,7 @@ No other field. The Device returns to its sessions (or Raw Mode). Ignored withou
 
 ### Rules
 
+- **Pre-emption.** While any session the Device holds is Awaiting Input, the Device renders its sessions as if there were no preview (and no Raw Mode), Escalation and Takeover included: the preview never hides Awaiting Input (ADR-0001). It stays in the preview meanwhile, the previewed session escalating by its clock, and shows the preview again once no session is Awaiting Input, as Raw Mode does.
 - **The Host gone.** Disconnected and `hello` end the preview, as they end Raw Mode. The Host sends `preview_enter` again, its `elapsed_ms` grown by the time passed, after the `session_upsert`s (and Raw Mode) of a new handshake, and after a silence the Device took for Disconnected.
 - **Bounded.** The Host ends the preview (`preview_exit`) when the web UI closes, so a preview never outlives the page that asked for it.
 - `preview_enter` and `preview_exit` tell the Device the Host is alive (Disconnected, above).

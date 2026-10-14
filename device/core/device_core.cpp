@@ -542,25 +542,25 @@ Rgb DeviceCore::colorOf(const Session& session) const {
   return session.hasProjectColor ? session.projectColor : theme_[session.state].palette[0];
 }
 
-// Disconnected wins over everything; then a preview, which shows its lone
-// session in place of the Device's sessions and Raw Mode; then Raw Mode,
-// unless a session is Awaiting Input; then the sessions.
+// Disconnected wins over everything; then the sessions while one is Awaiting
+// Input, which pre-empts both the preview and Raw Mode (ADR-0001); then a
+// preview, which shows its lone session in place of the Device's sessions and
+// Raw Mode; then Raw Mode; then the sessions.
 void DeviceCore::renderFrame() {
   if (disconnected()) {
     renderDisconnected();
     return;
   }
-  if (preview_) {
+  const bool awaitingInput = std::any_of(sessions_.begin(), sessions_.end(), [](const auto& entry) {
+    return entry.second.state == SessionState::AwaitingInput;
+  });
+  if (preview_ && !awaitingInput) {
     // O(1) swaps: no allocation per frame.
     sessions_.swap(previewed_);
     renderSessions();
     sessions_.swap(previewed_);
     return;
   }
-  // Awaiting Input always pre-empts Raw Mode (ADR-0001).
-  const bool awaitingInput = std::any_of(sessions_.begin(), sessions_.end(), [](const auto& entry) {
-    return entry.second.state == SessionState::AwaitingInput;
-  });
   if (rawMode_ && !awaitingInput) {
     frame_ = raw_;
     return;

@@ -271,7 +271,8 @@ class DeviceCore {
   bool rawMode_ = false;
   // Preview (the web UI's preview-state override): the matrix shows what it
   // would with one session, the one in previewed_, in place of the sessions
-  // and Raw Mode. previewed_ is swapped into sessions_ to render.
+  // and Raw Mode, unless a session is Awaiting Input, which pre-empts it.
+  // previewed_ is swapped into sessions_ to render.
   bool preview_ = false;
   std::map<std::string, Session> previewed_;
   PixelBuffer raw_;

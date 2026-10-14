@@ -3,8 +3,10 @@ package claudecode
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,8 +17,17 @@ import (
 // Ctrl-C, a denied permission and a rejected plan fire no hook, but Claude
 // Code writes a "[Request interrupted by user…]" user entry right away; and
 // when the transcript was last written, so the Host can tell a session that
-// went quiet. It implements host.TranscriptProbe.
-type Transcripts struct{}
+// went quiet. Approving a permission prompt fires no hook either, and writes
+// nothing to the transcript until the tool finishes; but the tool's output
+// file appears when it starts, so it also reports when the latest running
+// tool started. It implements host.TranscriptProbe.
+type Transcripts struct {
+	// TempDirs are where Claude Code may keep its temporary files (its
+	// claude-<uid> directories); nil means claude-<uid> in the system's
+	// temporary directory and in /tmp, where Claude Code 2.1 keeps them on
+	// Linux.
+	TempDirs []string
+}
 
 // interruptMarker starts the text of the user entry Claude Code writes when
 // the human interrupts a turn.
@@ -32,7 +43,7 @@ const (
 // Read reports when the transcript was last written and, when its latest
 // message entry (user or assistant; bookkeeping entries are skipped) is the
 // interrupt marker, when the human interrupted the turn.
-func (Transcripts) Read(path string) host.Transcript {
+func (t Transcripts) Read(path string) host.Transcript {
 	f, err := os.Open(path)
 	if err != nil {
 		return host.Transcript{}
@@ -42,11 +53,59 @@ func (Transcripts) Read(path string) host.Transcript {
 	if err != nil {
 		return host.Transcript{}
 	}
-	tr := host.Transcript{Modified: info.ModTime()}
+	tr := host.Transcript{Modified: info.ModTime(), ToolStarted: t.toolStarted(path)}
 	if at, ok := interrupted(f, info.Size()); ok {
 		tr.Interrupted = at
 	}
 	return tr
+}
+
+// toolStarted is when the newest output file of a tool the session of the
+// transcript at path runs was created; zero when there is none, or the
+// platform keeps no creation time. Claude Code writes the output of every
+// Bash command it runs, foreground or background, to
+// <project>/<session>/tasks/<id>.output in its temporary directory,
+// <project> named as the transcript's directory is, from when the command
+// starts; a foreground command's file goes when it ends. (Claude Code
+// 2.1.299 on Linux; see docs/spikes/hooks.md.)
+func (t Transcripts) toolStarted(path string) time.Time {
+	project := filepath.Base(filepath.Dir(path))
+	session := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	var newest time.Time
+	for _, dir := range t.tempDirs() {
+		tasks := filepath.Join(dir, project, session, "tasks")
+		entries, err := os.ReadDir(tasks)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !strings.HasSuffix(e.Name(), ".output") {
+				continue
+			}
+			if born := birthTime(filepath.Join(tasks, e.Name())); born.After(newest) {
+				newest = born
+			}
+		}
+	}
+	return newest
+}
+
+// tempDirs are TempDirs, else claude-<uid> in the system's temporary
+// directory and in /tmp (none on Windows, where it is unverified).
+func (t Transcripts) tempDirs() []string {
+	if t.TempDirs != nil {
+		return t.TempDirs
+	}
+	uid := os.Getuid()
+	if uid < 0 {
+		return nil
+	}
+	name := fmt.Sprintf("claude-%d", uid)
+	dirs := []string{filepath.Join(os.TempDir(), name)}
+	if tmp := filepath.Join("/tmp", name); tmp != dirs[0] {
+		dirs = append(dirs, tmp)
+	}
+	return dirs
 }
 
 // interrupted reports whether the latest message entry of the transcript f,

@@ -275,6 +275,23 @@ func (t *tracker) interrupt(id string, at, now time.Time) *session {
 	return s
 }
 
+// approved returns a session Awaiting Input to Working when a tool started
+// at started (zero: none runs) after it began to wait: the human approved
+// the prompt, and the tool runs. A tool already running before (a
+// background task) is no approval. It returns the session when it changed.
+func (t *tracker) approved(id string, started, now time.Time) *session {
+	s := t.sessions[id]
+	if s == nil || s.state != AwaitingInput || started.IsZero() || !started.After(s.stateEntered) {
+		return nil
+	}
+	started = notAfter(started, now)
+	if started.After(s.lastEventAt) {
+		s.lastEventAt = started
+	}
+	s.enter(Working, started)
+	return s
+}
+
 // decayDone returns to Idle every session that has been Done for decay by
 // now, entered when the decay was due: the Done decay timer Acknowledges it.
 // It returns the sessions that changed, by Tile slot.

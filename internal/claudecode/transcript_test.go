@@ -3,6 +3,7 @@ package claudecode_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -86,5 +87,62 @@ func TestTranscriptShowsWhenItWasLastWritten(t *testing.T) {
 
 	if got := (claudecode.Transcripts{}).Read(path).Modified; !got.Equal(written) {
 		t.Fatalf("Modified = %v, want %v", got, written)
+	}
+}
+
+// claudeDirs lays out a session as Claude Code does: its transcript under
+// projects/ and the output of each tool it runs under the temporary
+// directory, both in a directory named after the project.
+func claudeDirs(t *testing.T) (transcript, tasks, tmp string) {
+	t.Helper()
+	tmp = t.TempDir()
+	transcript = filepath.Join(t.TempDir(), "projects", "-tmp-spike-proj", "0f8e-session.jsonl")
+	tasks = filepath.Join(tmp, "-tmp-spike-proj", "0f8e-session", "tasks")
+	for _, dir := range []string{filepath.Dir(transcript), tasks} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(transcript, []byte(lines(promptLine, assistantLine)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return transcript, tasks, tmp
+}
+
+func runTool(t *testing.T, tasks, name string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(tasks, name+".output"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTranscriptShowsWhenTheToolTheAgentRunsStarted(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		t.Skip("no file birth time on", runtime.GOOS)
+	}
+	transcript, tasks, tmp := claudeDirs(t)
+	// File times come from a coarser clock than time.Now.
+	before := time.Now().Add(-time.Second)
+	runTool(t, tasks, "bcoog5cpt")
+	after := time.Now().Add(time.Second)
+
+	got := claudecode.Transcripts{TempDirs: []string{tmp}}.Read(transcript).ToolStarted
+
+	if got.Before(before) || got.After(after) {
+		t.Fatalf("ToolStarted = %v, want between %v and %v", got, before, after)
+	}
+}
+
+func TestTranscriptWithNoRunningTool(t *testing.T) {
+	transcript, _, tmp := claudeDirs(t)
+	// Another session of the same project runs one.
+	other := filepath.Join(tmp, "-tmp-spike-proj", "other-session", "tasks")
+	if err := os.MkdirAll(other, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runTool(t, other, "b1")
+
+	if got := (claudecode.Transcripts{TempDirs: []string{tmp}}).Read(transcript).ToolStarted; !got.IsZero() {
+		t.Fatalf("ToolStarted = %v with no tool running, want zero", got)
 	}
 }

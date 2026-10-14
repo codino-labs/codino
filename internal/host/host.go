@@ -102,11 +102,18 @@ type Transcript struct {
 	// Ctrl-C, a denied permission or a rejected plan); zero when the latest
 	// turn wasn't interrupted.
 	Interrupted time.Time
+	// ToolStarted is when the latest tool the Agent still runs started;
+	// zero when none runs or it can't tell. A tool starting after a
+	// permission prompt means the human approved it, which no hook reports
+	// until the tool finishes.
+	ToolStarted time.Time
 }
 
 // WithTranscriptProbe lets the Host return a stuck session to Idle: Claude
 // Code fires no hook when the human interrupts a turn, and a Working session
-// whose transcript stays unchanged for StaleAfter falls back to Idle.
+// whose transcript stays unchanged for StaleAfter falls back to Idle. It also
+// returns a session Awaiting Input to Working once the tool the human
+// approved starts running.
 func WithTranscriptProbe(p TranscriptProbe) Option {
 	return func(h *Host) { h.transcripts = p }
 }
@@ -323,8 +330,8 @@ func (h *Host) toProbe() probeTargets {
 }
 
 // probe runs the probes without h.mu (they are file and OS I/O), then reaps
-// sessions whose Agent is gone and returns interrupted and stale ones to
-// Idle.
+// sessions whose Agent is gone, returns interrupted and stale ones to Idle,
+// and approved ones to Working.
 func (h *Host) probe(p probeTargets) {
 	read := map[string]Transcript{}
 	for id, path := range p.transcripts {
@@ -354,6 +361,9 @@ func (h *Host) probe(p probeTargets) {
 	h.updateExitGrace(now)
 	for id, tr := range read {
 		s := h.sessions.interrupt(id, tr.Interrupted, now)
+		if s == nil {
+			s = h.sessions.approved(id, tr.ToolStarted, now)
+		}
 		if s == nil {
 			if s = h.sessions.staleToIdle(id, tr.Modified, now); s != nil {
 				slog.Info("stale Working session back to Idle", "session", s.id, "stale_after", StaleAfter)

@@ -139,6 +139,8 @@ func killedAfter(t *testing.T, clock *fakeClock, scenario string, d time.Duratio
 type fakeTranscripts struct {
 	clock       *fakeClock
 	interrupted time.Time
+	// toolStarted is when a tool started running, reported from then on.
+	toolStarted time.Time
 	probed      []string
 }
 
@@ -148,6 +150,9 @@ func (f *fakeTranscripts) Read(path string) host.Transcript {
 	tr := host.Transcript{Modified: f.clock.Now()}
 	if !f.interrupted.IsZero() && !f.clock.Now().Before(f.interrupted) {
 		tr.Interrupted = f.interrupted
+	}
+	if !f.toolStarted.IsZero() && !f.clock.Now().Before(f.toolStarted) {
+		tr.ToolStarted = f.toolStarted
 	}
 	return tr
 }

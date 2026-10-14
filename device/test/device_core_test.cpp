@@ -390,3 +390,13 @@ TEST_CASE_FIXTURE(Device8x8, "a hello forgets the sessions of the previous Host 
 
   CHECK(core.render() == loneSessionFrame("working"));
 }
+
+TEST_CASE_FIXTURE(Device8x8, "Disconnected holds however long the silence, even past a clock wrap") {
+  core.receive(upsert("s1", "working"));
+  clock.advance(kTimeout);
+  REQUIRE(core.render() == disconnectedFrame({}));
+
+  clock.advance(UINT32_MAX - kTimeout + 2);  // 2^32 + 1 ms after the last message: millis() is just past it
+
+  CHECK(core.render() == disconnectedFrame({}));
+}

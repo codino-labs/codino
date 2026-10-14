@@ -182,8 +182,10 @@ func runDaemon(paths daemon.Paths, args []string) error {
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 
-	// A daemon spawned while the previous one is still exiting waits for it.
-	ln, err := daemon.ListenWithin(paths, daemon.Timeout)
+	// A daemon spawned while the previous one is still exiting waits for it,
+	// longer than a client waits, so the next event finds it even if this
+	// one timed out.
+	ln, err := daemon.ListenWithin(paths, takeoverWait)
 	if errors.Is(err, daemon.ErrAlreadyRunning) {
 		slog.Info("another Host Daemon is running; exiting")
 		return nil
@@ -219,6 +221,11 @@ func runDaemon(paths daemon.Paths, args []string) error {
 	}
 	return nil
 }
+
+// takeoverWait bounds how long a new Host Daemon waits for the previous one
+// to release its Device and lock: draining clients (up to 2 s) plus closing a
+// hung Device (up to 1 s), with margin.
+const takeoverWait = 5 * time.Second
 
 type systemClock struct{}
 

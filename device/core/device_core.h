@@ -87,7 +87,8 @@ class DeviceCore {
 
   HardwareProfile profile_;
   std::string firmwareVersion_;
-  bool disconnected() const;
+  bool disconnected();
+  void hostMessage();
   void renderDisconnected();
 
   const Clock& clock_;
@@ -95,6 +96,9 @@ class DeviceCore {
   std::map<std::string, SessionState> sessions_;
   // Clock time of the last message from the Host (boot until the first).
   uint32_t lastHostMessage_;
+  // Latched once the timeout passes, until the next Host message, so a
+  // silence longer than the millis() wrap (~49.7 days) never ends it.
+  bool disconnected_ = false;
 };
 
 }  // namespace device

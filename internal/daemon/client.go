@@ -72,7 +72,7 @@ func (c Client) call(ctx context.Context, req Request, spawn func() error) (Resp
 			return resp, err
 		}
 		if spawn == nil {
-			return Response{}, fmt.Errorf("%w: %v", ErrNotRunning, err)
+			return Response{}, fmt.Errorf("%w: %w", ErrNotRunning, err)
 		}
 		if !spawned {
 			if err := spawn(); err != nil {
@@ -93,7 +93,7 @@ func (c Client) roundTrip(ctx context.Context, req Request) (Response, error) {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", c.Paths.Socket)
 	if err != nil {
-		return Response{}, fmt.Errorf("%w: %v", errUnavailable, err)
+		return Response{}, fmt.Errorf("%w: %w", errUnavailable, err)
 	}
 	defer conn.Close()
 	if deadline, ok := ctx.Deadline(); ok {

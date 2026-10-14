@@ -240,10 +240,10 @@ func TestListenWithinWaitsForAnExitingDaemonToReleaseTheLock(t *testing.T) {
 	}
 }
 
-func TestListenWithinGivesUpOnARunningDaemon(t *testing.T) {
+func TestListenWithinGivesUpOnALiveDaemon(t *testing.T) {
 	paths := daemon.PathsIn(filepath.Join(t.TempDir(), "rt"))
-	running := listen(t, paths)
-	defer running.Unlock()
+	live := listen(t, paths)
+	defer live.Unlock()
 
 	if _, err := daemon.ListenWithin(paths, 0); !errors.Is(err, daemon.ErrAlreadyRunning) {
 		t.Errorf("ListenWithin: err = %v, want ErrAlreadyRunning", err)

@@ -82,6 +82,10 @@ The computer the Device is plugged into.
 The single host process that owns the USB link to the Device, tracks every Agent Session and computes the Aggregate State.
 _Avoid_: server, service, bridge
 
+**Exit Grace**:
+How long the Host Daemon stays up with no Agent Sessions before it retires (exits). The next event spawns a new one.
+_Avoid_: timeout, idle timeout (Idle is a Session State)
+
 **Layout**:
 How the matrix area is used: one Aggregate State for the whole matrix, or one tile per Agent Session.
 _Avoid_: view, screen, mode

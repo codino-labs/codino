@@ -55,7 +55,7 @@ std::string DeviceCore::receive(std::string_view line) {
     // A new link: the Host follows with every session it knows, so sessions
     // from an earlier Host Daemon must not linger.
     sessions_.clear();
-    lastHostMessage_ = clock_.millis();
+    hostMessage();
     return helloReply();
   } else if (type == "session_upsert") {
     std::string_view id = message["id"] | "";
@@ -68,7 +68,7 @@ std::string DeviceCore::receive(std::string_view line) {
   } else if (type != "heartbeat") {
     return {};
   }
-  lastHostMessage_ = clock_.millis();
+  hostMessage();
   return {};
 }
 
@@ -100,9 +100,15 @@ SessionState DeviceCore::aggregateState() const {
   return aggregate;
 }
 
-// Unsigned subtraction keeps working when millis() wraps (every ~49 days).
-bool DeviceCore::disconnected() const {
-  return clock_.millis() - lastHostMessage_ >= kDefaultDisconnectedTimeoutMs;
+// Unsigned subtraction keeps working when millis() wraps (every ~49.7 days).
+bool DeviceCore::disconnected() {
+  if (clock_.millis() - lastHostMessage_ >= kDefaultDisconnectedTimeoutMs) disconnected_ = true;
+  return disconnected_;
+}
+
+void DeviceCore::hostMessage() {
+  lastHostMessage_ = clock_.millis();
+  disconnected_ = false;
 }
 
 // Disconnected is not a Session State: a dim slash across an otherwise dark

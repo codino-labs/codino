@@ -48,7 +48,6 @@ type Host struct {
 	// any); zero while there are sessions.
 	emptySince time.Time
 	retired    chan struct{}
-	isRetired  bool
 }
 
 // DefaultExitGrace is how long the Host Daemon stays up with no sessions.
@@ -83,6 +82,16 @@ func New(clock Clock, devices devicelink.Discoverer, opts ...Option) *Host {
 // Host Daemon should exit, and the next event spawns a new one.
 func (h *Host) Retired() <-chan struct{} { return h.retired }
 
+// hasRetired reports whether Retired is closed, without waiting.
+func (h *Host) hasRetired() bool {
+	select {
+	case <-h.retired:
+		return true
+	default:
+		return false
+	}
+}
+
 // ErrRetired means the Host has retired and takes no more events: the
 // client should deliver them to a new Host Daemon.
 var ErrRetired = errors.New("the Host Daemon is exiting")
@@ -94,7 +103,7 @@ func (h *Host) Apply(e Event) error {
 	}
 	h.mu.Lock()
 	defer h.unlock()
-	if h.isRetired {
+	if h.hasRetired() {
 		return ErrRetired
 	}
 	now := h.clock.Now()
@@ -123,8 +132,7 @@ func (h *Host) Tick() {
 	defer h.tickMu.Unlock()
 
 	h.mu.Lock()
-	if !h.isRetired && !h.emptySince.IsZero() && h.clock.Now().Sub(h.emptySince) >= h.exitGrace {
-		h.isRetired = true
+	if !h.hasRetired() && !h.emptySince.IsZero() && h.clock.Now().Sub(h.emptySince) >= h.exitGrace {
 		close(h.retired)
 	}
 	h.dropGoneDevice()

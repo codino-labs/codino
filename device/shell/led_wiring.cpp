@@ -31,7 +31,7 @@ void LedWiring::write(const PixelBuffer& shown, uint8_t* out) const {
   // light plus the floor, which the scale leaves room for.
   uint64_t num = 1, den = 1;
   bool keepLit = true;
-  if (light + dark > cap) {
+  if (light > 0 && light + dark > cap) {
     den = light;
     num = cap > dark + floor ? cap - dark - floor : 0;
     keepLit = num > 0;

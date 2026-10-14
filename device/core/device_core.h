@@ -164,7 +164,7 @@ class DeviceCore {
   // The human Acknowledges on the Device (button press, IMU double-tap, a key
   // on the Virtual Device): every Done session is cleared and the Escalation
   // of every Awaiting Input session starts over. Returns the line to send to
-  // the Host.
+  // the Host: none while the Device shows "update me".
   std::string acknowledge();
 
   // Renders the frame for the current clock time.

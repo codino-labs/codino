@@ -366,6 +366,8 @@ uint32_t DeviceCore::clockTimeOf(int64_t hostTime) const {
 }
 
 std::string DeviceCore::acknowledge() {
+  // No Host it can talk to is listening, and it holds no sessions.
+  if (updateWanted_) return {};
   for (auto& [id, session] : sessions_) acknowledge(session, clock_.millis());
   return R"({"type":"acknowledge"})";
 }
@@ -409,8 +411,9 @@ void DeviceCore::renderDisconnected() {
   }
 }
 
-// "Update me": an amber arrow pointing up, its head as wide as the matrix
-// in the upper half, its shaft down the middle to the bottom row. Nothing
+// "Update me": an amber arrow pointing up, its head a triangle in the upper
+// half (as wide as the matrix when it is no wider than tall), its shaft down
+// the middle to the bottom row. Nothing
 // else the Device shows is an arrow, or this color.
 void DeviceCore::renderUpdateMe() {
   constexpr Rgb kUpdateMe{255, 110, 0};
@@ -577,7 +580,8 @@ Rgb DeviceCore::colorOf(const Session& session) const {
   return session.hasProjectColor ? session.projectColor : theme_[session.state].palette[0];
 }
 
-// Disconnected wins over everything; then the sessions while one is Awaiting
+// Update me wins over everything (a Host of another version said hello);
+// then Disconnected; then the sessions while one is Awaiting
 // Input, which pre-empts both the preview and Raw Mode (ADR-0001); then a
 // preview, which shows its lone session in place of the Device's sessions and
 // Raw Mode; then Raw Mode; then the sessions.

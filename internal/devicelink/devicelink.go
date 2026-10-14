@@ -61,23 +61,22 @@ const FlasherURL = "https://github.com/codino-labs/codino#2-flash"
 // or Codino on the Host (a newer one).
 type VersionMismatchError struct {
 	Candidate string
-	// Device is the Device's protocol version, Firmware its firmware's.
-	Device   int
-	Firmware string
-	// Host is the Host's protocol version.
-	Host int
+	// The Device's protocol and firmware versions, and the Host's protocol.
+	DeviceProtocol int
+	Firmware       string
+	HostProtocol   int
 }
 
 // FirmwareOutdated is true when the Device is the one to update.
-func (e *VersionMismatchError) FirmwareOutdated() bool { return e.Device < e.Host }
+func (e *VersionMismatchError) FirmwareOutdated() bool { return e.DeviceProtocol < e.HostProtocol }
 
 func (e *VersionMismatchError) Error() string {
 	if e.FirmwareOutdated() {
 		return fmt.Sprintf("%s runs firmware %s, which speaks protocol %d; this Host speaks protocol %d: update the firmware with the web flasher, %s",
-			e.Candidate, e.Firmware, e.Device, e.Host, FlasherURL)
+			e.Candidate, e.Firmware, e.DeviceProtocol, e.HostProtocol, FlasherURL)
 	}
 	return fmt.Sprintf("%s runs firmware %s, which speaks protocol %d, newer than this Host's protocol %d: update Codino on this Host (the Claude Code plugin)",
-		e.Candidate, e.Firmware, e.Device, e.Host)
+		e.Candidate, e.Firmware, e.DeviceProtocol, e.HostProtocol)
 }
 
 // Device is a claimed Device: the handshake succeeded and protocol versions match.
@@ -181,7 +180,7 @@ func handshake(c Candidate, port io.ReadWriteCloser, now time.Time) (*Device, er
 	reply := r.reply
 	if reply.Protocol != protocol.Version {
 		port.Close()
-		return nil, &VersionMismatchError{Candidate: c.Name, Device: reply.Protocol, Firmware: reply.Firmware, Host: protocol.Version}
+		return nil, &VersionMismatchError{Candidate: c.Name, DeviceProtocol: reply.Protocol, Firmware: reply.Firmware, HostProtocol: protocol.Version}
 	}
 
 	dev := &Device{Name: c.Name, HelloReply: reply, port: port, gone: make(chan struct{}), acknowledged: make(chan struct{}, 1),

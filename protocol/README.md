@@ -58,7 +58,7 @@ The protocol version is the whole compatibility contract: a Host drives only a D
 - **The Host** sends `hello`, reads the `hello_reply`, and on another `protocol` closes the port without sending anything else. `codino status` and the web UI say what to update: the firmware, with a link to the web flasher, when the Device's version is lower; Codino on the Host (the plugin) when it is higher. While the Device stays plugged in the Host keeps reporting it without opening the port again, for a minute (`devicelink.RefusedRetry`), then says `hello` once more; replugging (as reflashing does) tries it at once.
 - **The Device** that receives a `hello` whose `protocol` is an integer other than its own still answers it with its `hello_reply`, forgets its sessions, Raw Mode and the preview as for any `hello`, and shows **update me**: an amber arrow pointing up (head in the upper half of the matrix, shaft down the middle), under the brightness cap and turned by the rotation like everything else, Quiet Mode or not. It is not Disconnected: the Host's silence that follows doesn't change it. Until the next `hello` the Device ignores every other message (they come from a Host it can't understand) and sends nothing but `hello_reply`. A `hello` in the Device's own version ends it and starts the link as usual. A `hello` without an integer `protocol` is taken as the Device's own version.
 
-Since a v0 Device does this, a v0 Device plugged into any later Host shows update me: the later Host only has to keep `hello` as it is.
+Since a v0 Device does this, a v0 Device plugged into any later Host shows update me: the later Host only has to keep `hello` as it is. (Firmware built before this rule, #5's, never shipped.)
 
 ## Session messages (Host → Device)
 

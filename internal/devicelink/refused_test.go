@@ -114,7 +114,7 @@ func refuseAsMismatch(t *testing.T, cs []Candidate, name string, deviceProtocol 
 	t.Helper()
 	for _, c := range cs {
 		if c.Name == name {
-			c.Refused(&VersionMismatchError{Candidate: name, Device: deviceProtocol, Firmware: "0.0.9", Host: deviceProtocol + 1})
+			c.Refused(&VersionMismatchError{Candidate: name, DeviceProtocol: deviceProtocol, Firmware: "0.0.9", HostProtocol: deviceProtocol + 1})
 			return
 		}
 	}
@@ -131,7 +131,7 @@ func TestADeviceOnAnotherProtocolIsReportedWhileItStaysPluggedIn(t *testing.T) {
 	// the mismatch would mean Claim tried it again.
 	_, err := Claim(s.Candidates(), f.now)
 	var mismatch *VersionMismatchError
-	if !errors.As(err, &mismatch) || mismatch.Device != 0 || mismatch.Firmware != "0.0.9" {
+	if !errors.As(err, &mismatch) || mismatch.DeviceProtocol != 0 || mismatch.Firmware != "0.0.9" {
 		t.Fatalf("Claim() error = %v, want the remembered version mismatch", err)
 	}
 
@@ -155,13 +155,13 @@ func TestADeviceOnAnotherProtocolIsAskedAgainAfterAWhile(t *testing.T) {
 }
 
 func TestAVersionMismatchSaysWhatToUpdate(t *testing.T) {
-	older := (&VersionMismatchError{Candidate: "/dev/ttyACM0", Device: 0, Firmware: "0.1.0", Host: 1}).Error()
+	older := (&VersionMismatchError{Candidate: "/dev/ttyACM0", DeviceProtocol: 0, Firmware: "0.1.0", HostProtocol: 1}).Error()
 	for _, want := range []string{"/dev/ttyACM0", "firmware 0.1.0", "protocol 0", "protocol 1", "update the firmware", FlasherURL} {
 		if !strings.Contains(older, want) {
 			t.Errorf("older Device: %q doesn't say %q", older, want)
 		}
 	}
-	newer := (&VersionMismatchError{Candidate: "/dev/ttyACM0", Device: 2, Firmware: "0.3.0", Host: 1}).Error()
+	newer := (&VersionMismatchError{Candidate: "/dev/ttyACM0", DeviceProtocol: 2, Firmware: "0.3.0", HostProtocol: 1}).Error()
 	for _, want := range []string{"protocol 2", "protocol 1", "update Codino on this Host"} {
 		if !strings.Contains(newer, want) {
 			t.Errorf("newer Device: %q doesn't say %q", newer, want)

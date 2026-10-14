@@ -441,7 +441,8 @@ TEST_CASE("flash stores: an install the flash can't hold is refused") {
 // Node against the same files) and this decoder share golden files, so the
 // two can't drift: hardware-profiles.tsv holds the line each preset (and a
 // Custom example) is stored as, hwprofile-esp32-s3-matrix.bin the whole 4 KB
-// partition image of the preselected one.
+// partition image of the preselected one, hardware-profiles-refused.tsv
+// profiles both must refuse.
 
 namespace {
 
@@ -469,6 +470,21 @@ TEST_CASE("flasher images: every preset's line is one the Device reads and would
     REQUIRE(device::parseHardwareProfile(line, profile));
     CHECK(device::hardwareProfileLine(profile) == line);
   }
+}
+
+TEST_CASE("flasher images: the profiles the flasher refuses are the ones the Device refuses") {
+  // hardware-profiles-refused.tsv: why, then the line. Whether the firmware
+  // can drive data_pin is the firmware's (canDrive in firmware/src/main.cpp),
+  // checked against the flasher's pin list by the Node test.
+  std::ifstream in(std::string(GOLDEN_DIR) + "/hardware-profiles-refused.tsv");
+  REQUIRE(in.good());
+  int rows = 0;
+  for (std::string row; std::getline(in, row); ++rows) {
+    CAPTURE(row);
+    device::HardwareProfile profile;
+    CHECK_FALSE(device::parseHardwareProfile(row.substr(row.find('\t') + 1), profile));
+  }
+  CHECK(rows >= 5);
 }
 
 TEST_CASE("flasher images: the preselected preset is the reference build, as its whole partition image") {

@@ -65,6 +65,15 @@ test("the pins offered are the ones the firmware can drive", () => {
   assert.deepEqual(drivablePins, firmwarePins);
 });
 
+test("the profiles the Device refuses are refused here too", () => {
+  const rows = fs.readFileSync(path.join(golden, "hardware-profiles-refused.tsv"), "utf8").trimEnd().split("\n");
+  assert.ok(rows.length >= 5);
+  for (const row of rows) {
+    const [why, line] = row.split("\t");
+    assert.notDeepEqual(profileProblems(JSON.parse(line)), [], why);
+  }
+});
+
 test("a profile the Device would refuse is refused before it is flashed", () => {
   const good = presets[0].profile;
   const refused = [

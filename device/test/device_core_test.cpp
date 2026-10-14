@@ -1902,3 +1902,9 @@ TEST_CASE("update me stays under the brightness cap, turned by the rotation, and
   core.receive(fixture("hello-newer-protocol.jsonl"));
   CHECK(isUpArrow(core.render()));
 }
+
+TEST_CASE_FIXTURE(Device8x8, "while it asks for an update a press on the Device tells the Host nothing") {
+  core.receive(fixture("hello-newer-protocol.jsonl"));
+  CHECK(core.acknowledge().empty());
+  CHECK(core.render() == updateMeFrame());
+}

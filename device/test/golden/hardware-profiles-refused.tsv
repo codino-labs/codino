@@ -1,0 +1,9 @@
+width-0	{"width":0,"height":8,"data_pin":14,"serpentine":false,"color_order":"RGB","brightness_cap":48,"current_cap_ma":300,"button":false,"imu":true}
+height-256	{"width":8,"height":256,"data_pin":14,"serpentine":false,"color_order":"RGB","brightness_cap":48,"current_cap_ma":300,"button":false,"imu":true}
+frame-too-big	{"width":64,"height":64,"data_pin":14,"serpentine":false,"color_order":"RGB","brightness_cap":48,"current_cap_ma":300,"button":false,"imu":true}
+width-not-integer	{"width":8.5,"height":8,"data_pin":14,"serpentine":false,"color_order":"RGB","brightness_cap":48,"current_cap_ma":300,"button":false,"imu":true}
+color-order-rgbw	{"width":8,"height":8,"data_pin":14,"serpentine":false,"color_order":"RGBW","brightness_cap":48,"current_cap_ma":300,"button":false,"imu":true}
+brightness-cap-0	{"width":8,"height":8,"data_pin":14,"serpentine":false,"color_order":"RGB","brightness_cap":0,"current_cap_ma":300,"button":false,"imu":true}
+current-cap-65536	{"width":8,"height":8,"data_pin":14,"serpentine":false,"color_order":"RGB","brightness_cap":48,"current_cap_ma":65536,"button":false,"imu":true}
+serpentine-not-bool	{"width":8,"height":8,"data_pin":14,"serpentine":1,"color_order":"RGB","brightness_cap":48,"current_cap_ma":300,"button":false,"imu":true}
+imu-missing	{"width":8,"height":8,"data_pin":14,"serpentine":false,"color_order":"RGB","brightness_cap":48,"current_cap_ma":300,"button":false}

@@ -13,7 +13,7 @@ The firmware reports this profile in its `hello_reply`, and `protocol/fixtures/h
 | `serpentine` | `false` | Schematic [2]: U1…U64 are chained row by row (`DOUT_1`…`DOUT_7` link the rows). Waveshare's demos address LED `row*8+col` [3] and use `NEO_MATRIX_ROWS + NEO_MATRIX_PROGRESSIVE` (HTTP demo). | Likely. The schematic shows the electrical chain, not the placement on the PCB. One community ESPHome config maps the matrix as serpentine *columns* turned 180° [5]. Check it on the board (step 4). |
 | `color_order` | `"RGB"` | Waveshare's Color and Game demos use `NEO_RGB` [3]. Robojax, writing for this board, says "The matrix on this board expects RGB order" [4]. | Uncertain. Waveshare's Font and HTTP demos use `NEO_GRB` [3]. Check it on the board (step 4). |
 | `brightness_cap` | 48 | Waveshare warns that high brightness heats the board fast and can damage it [1][3]. Its demos cap brightness at 40–60 of 255 [3]. | A conservative guess. Check the heat (step 9). |
-| `current_cap_ma` | 300 | Leaves 200 mA of a 500 mA USB port to the ESP32-S3. The firmware enforces it (`LedWiring`, below): by the power model a whole-matrix Takeover in red at the cap of 48 draws 257 mA and goes out as it is; a white frame at the cap (570 mA by the model) is dimmed to fit. | Measure it (step 9). |
+| `current_cap_ma` | 300 | Leaves 200 mA of a 500 mA USB port: 100 mA for the ESP32-S3 (an estimate) and 100 mA of margin. The firmware enforces it (`LedWiring`, below): by the power model a whole-matrix Takeover in red at the cap of 48 draws 257 mA and goes out as it is; a white frame at the cap (570 mA by the model) is dimmed to fit. | Measure it (step 9). |
 | `button` | `false` | The board has a BOOT button on IO0 [2], but nothing reads it yet. #13 makes it Acknowledge and should then turn this field to `true`. | |
 | `imu` | `true` | QMI8658 on I2C: SDA IO11, SCL IO12, INT1 IO10, INT2 IO13 [2][3]. #13 uses it. | Certain |
 
@@ -50,11 +50,12 @@ The external panels are wired with three Dupont wires: 5V, GND and data to GPIO 
 | | Built-in 8×8 | External 8×8 | External 16×16 |
 |---|---|---|---|
 | USB port | 500 mA | 500 mA | 500 mA |
-| ESP32-S3 board, USB active, no radio (estimate) | 100–200 mA | 100 mA | 100 mA |
+| ESP32-S3 board, USB active, no radio (estimate) | 100 mA | 100 mA | 100 mA |
 | Built-in matrix left dark (64 × 1 mA) | | 64 mA | 64 mA |
 | `current_cap_ma`: the matrix | 300 mA | 330 mA | 330 mA |
 | of which its LEDs dark | 64 mA | 64 mA | 256 mA |
 | left for light | 236 mA | 266 mA | 74 mA |
+| margin on the port | 100 mA | 6 mA | 6 mA |
 
 - **External 8×8**, cap 64: a whole-matrix Takeover in red is 64 × 16 × 64/255 = 257 mA of light, inside 266: Codino's own brightest rendering goes out as it is. A white frame (675 mA by the model) is dimmed.
 - **External 16×16**, cap 32: with only 74 mA left for light, the brightness cap alone would have to be 1 to keep a white frame inside the port (256 × 42 × c/255 ≤ 74), and 4 for a red Takeover (256 × 16 × c/255 ≤ 74). So the cap is 32, which a sparse frame (the mascot, a few Tiles) reaches, and the current limit dims whatever lights much of the matrix: a red Takeover ends up near 4/255, a white frame near 1/255. A 16×16 on a USB port is dim when it is full. For more, power the panel from a 5 V supply of 1 A or more (its GND joined to the board's) and flash Custom with a higher current cap.
@@ -87,7 +88,7 @@ The images land in `device/build/firmware/` (build output, not committed). The w
 | `hwprofile` (data, subtype `0x40`) | `0x210000` | 4 KB | the Hardware Profile: one line of JSON, the `hardware_profile` object of a `hello_reply`, then `\n`, then erased bytes |
 | `littlefs` | `0x211000` | 1980 KB | `/preferences.jsonl` (the cached Preferences) and `/installed/{theme,sprite_pack}/NAME.jsonl` (installed Themes and Sprite Packs) |
 
-At boot the firmware reads `hwprofile`. A blank partition gets the reference profile written into it. A profile that doesn't parse (`device::parseHardwareProfile`), or whose `data_pin` this firmware can't drive, is left in place, and the Device runs with the reference profile; its `hello_reply` reports the profile it actually uses. The web flasher writes the chosen profile by flashing a 4 KB image at `0x210000` that holds that line padded with `0xFF`, built in the browser by `device/flasher/hardware_profile.mjs` and checked against the same golden files as the firmware's decoder (`device/test/golden/hardware-profiles.tsv`, `hwprofile-esp32-s3-matrix.bin`).
+At boot the firmware reads `hwprofile`. A blank partition gets the reference profile written into it. A profile that doesn't parse (`device::parseHardwareProfile`), or whose `data_pin` this firmware can't drive, is left in place, and the Device runs with the reference profile; its `hello_reply` reports the profile it actually uses. Every install from the web flasher writes the chosen profile (the page starts from the reference preset, so an update needs the same choice again) by flashing a 4 KB image at `0x210000` that holds that line padded with `0xFF`, built in the browser by `device/flasher/hardware_profile.mjs` and checked against the same golden files as the firmware's decoder (`device/test/golden/hardware-profiles.tsv`, `hwprofile-esp32-s3-matrix.bin`, and `hardware-profiles-refused.tsv`, the profiles both refuse).
 
 ## Web flasher
 

@@ -3,8 +3,9 @@
 // `hardware_profile` object of a hello_reply (protocol/README.md), in the
 // order the firmware writes them (device::hardwareProfileLine), then `\n`,
 // then erased flash (0xFF) to the end of the 4 KB partition. The firmware
-// reads it at boot with device::parseHardwareProfile; the validation below
-// is the same, so the flasher refuses a profile the Device would ignore.
+// reads it at boot with device::parseHardwareProfile, which refuses what
+// profileProblems below refuses (hardware-profiles-refused.tsv, checked by
+// both); the data pin is checked against the pins the firmware drives.
 //
 // Shared golden files keep this and the C++ side in step:
 // device/test/golden/hardware-profiles.tsv and hwprofile-esp32-s3-matrix.bin,

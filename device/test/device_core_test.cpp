@@ -54,33 +54,27 @@ std::string upsert(const std::string& id, const std::string& state) {
 // The wire names of the Session States, most urgent first.
 const char* const kStatesByUrgency[] = {"awaiting_input", "error", "done", "working", "idle"};
 
-std::vector<device::Rgb> pixelsOf(const device::PixelBuffer& frame) {
-  std::vector<device::Rgb> pixels;
-  for (uint8_t y = 0; y < frame.height(); ++y)
-    for (uint8_t x = 0; x < frame.width(); ++x) pixels.push_back(frame.at(x, y));
-  return pixels;
-}
-
 // The frame a lone Agent Session in `state` produces.
-std::vector<device::Rgb> loneSessionFrame(const std::string& state) {
+device::PixelBuffer loneSessionFrame(const std::string& state) {
   FakeClock clock;
   device::DeviceCore core(profile8x8(), "0.1.0", clock);
   core.receive(upsert("lone", state));
-  return pixelsOf(core.render());
+  return core.render();
 }
 
 bool isDark(const device::PixelBuffer& frame) {
-  for (uint8_t y = 0; y < frame.height(); ++y)
-    for (uint8_t x = 0; x < frame.width(); ++x)
-      if (frame.at(x, y) != device::Rgb{}) return false;
-  return true;
+  return frame == device::PixelBuffer(frame.width(), frame.height());
 }
+
+// A fresh 8x8 Device core with a fake clock, for TEST_CASE_FIXTURE.
+struct Device8x8 {
+  FakeClock clock;
+  device::DeviceCore core{profile8x8(), "0.1.0", clock};
+};
 
 }  // namespace
 
-TEST_CASE("with no Agent Sessions the whole matrix is dark") {
-  FakeClock clock;
-  device::DeviceCore core(profile8x8(), "0.1.0", clock);
+TEST_CASE_FIXTURE(Device8x8, "with no Agent Sessions the whole matrix is dark") {
 
   const auto& frame = core.render();
 
@@ -89,9 +83,7 @@ TEST_CASE("with no Agent Sessions the whole matrix is dark") {
   CHECK(isDark(frame));
 }
 
-TEST_CASE("a session upsert lights the whole matrix in one color") {
-  FakeClock clock;
-  device::DeviceCore core(profile8x8(), "0.1.0", clock);
+TEST_CASE_FIXTURE(Device8x8, "a session upsert lights the whole matrix in one color") {
 
   CHECK(core.receive(fixture("session-upsert.jsonl")).empty());
 
@@ -128,24 +120,20 @@ TEST_CASE("the Aggregate State is the most urgent Session State") {
         core.receive(upsert(first, less));
         core.receive(upsert(second, more));
 
-        CHECK(pixelsOf(core.render()) == loneSessionFrame(more));
+        CHECK(core.render() == loneSessionFrame(more));
       }
     }
   }
 }
 
-TEST_CASE("an upsert for a known session replaces its Session State") {
-  FakeClock clock;
-  device::DeviceCore core(profile8x8(), "0.1.0", clock);
+TEST_CASE_FIXTURE(Device8x8, "an upsert for a known session replaces its Session State") {
   core.receive(upsert("s1", "awaiting_input"));
   core.receive(upsert("s1", "working"));
 
-  CHECK(pixelsOf(core.render()) == loneSessionFrame("working"));
+  CHECK(core.render() == loneSessionFrame("working"));
 }
 
-TEST_CASE("a session remove drops the session from the Aggregate State") {
-  FakeClock clock;
-  device::DeviceCore core(profile8x8(), "0.1.0", clock);
+TEST_CASE_FIXTURE(Device8x8, "a session remove drops the session from the Aggregate State") {
   core.receive(fixture("session-upsert.jsonl"));
 
   CHECK(core.receive(fixture("session-remove.jsonl")).empty());
@@ -153,15 +141,13 @@ TEST_CASE("a session remove drops the session from the Aggregate State") {
   CHECK(isDark(core.render()));
 }
 
-TEST_CASE("removing one of two sessions leaves the other's state") {
-  FakeClock clock;
-  device::DeviceCore core(profile8x8(), "0.1.0", clock);
+TEST_CASE_FIXTURE(Device8x8, "removing one of two sessions leaves the other's state") {
   core.receive(upsert("s1", "error"));
   core.receive(upsert("s2", "done"));
 
   core.receive(R"({"type":"session_remove","id":"s1"})");
 
-  CHECK(pixelsOf(core.render()) == loneSessionFrame("done"));
+  CHECK(core.render() == loneSessionFrame("done"));
 }
 
 TEST_CASE("hello gets a reply with protocol version, firmware version and Hardware Profile") {
@@ -187,14 +173,12 @@ TEST_CASE("hello gets a reply with protocol version, firmware version and Hardwa
   CHECK_MESSAGE(actual == expected, "reply: " << reply);
 }
 
-TEST_CASE("a heartbeat is accepted without a reply and without changing the matrix") {
-  FakeClock clock;
-  device::DeviceCore core(profile8x8(), "0.1.0", clock);
+TEST_CASE_FIXTURE(Device8x8, "a heartbeat is accepted without a reply and without changing the matrix") {
   core.receive(upsert("s1", "working"));
 
   CHECK(core.receive(fixture("heartbeat.jsonl")).empty());
 
-  CHECK(pixelsOf(core.render()) == loneSessionFrame("working"));
+  CHECK(core.render() == loneSessionFrame("working"));
 }
 
 TEST_CASE("messages the Device cannot use are ignored as a whole") {
@@ -220,7 +204,7 @@ TEST_CASE("messages the Device cannot use are ignored as a whole") {
 
     CHECK(core.receive(line).empty());
 
-    CHECK(pixelsOf(core.render()) == loneSessionFrame("working"));
+    CHECK(core.render() == loneSessionFrame("working"));
   }
 }
 
@@ -239,23 +223,29 @@ TEST_CASE("the Hardware Profile sets the matrix size") {
   CHECK(isSolidLit(frame));
 }
 
-TEST_CASE("a line ending in CRLF is accepted") {
-  FakeClock clock;
-  device::DeviceCore core(profile8x8(), "0.1.0", clock);
+TEST_CASE_FIXTURE(Device8x8, "a line ending in CRLF is accepted") {
 
   core.receive(upsert("s1", "error") + "\r");
 
-  CHECK(pixelsOf(core.render()) == loneSessionFrame("error"));
+  CHECK(core.render() == loneSessionFrame("error"));
 }
 
-TEST_CASE("the solid Aggregate State color holds steady as time passes") {
-  FakeClock clock;
-  device::DeviceCore core(profile8x8(), "0.1.0", clock);
+TEST_CASE_FIXTURE(Device8x8, "the solid Aggregate State color holds steady as time passes") {
   core.receive(fixture("session-upsert.jsonl"));
-  const auto before = pixelsOf(core.render());
+  const device::PixelBuffer before = core.render();
 
   for (int i = 0; i < 20; ++i) {
     clock.advance(250);
-    CHECK(pixelsOf(core.render()) == before);
+    CHECK(core.render() == before);
+  }
+}
+
+TEST_CASE_FIXTURE(Device8x8, "a hello from any protocol version is answered with the Device's version") {
+  for (const std::string hello : {R"({"type":"hello"})", R"({"type":"hello","protocol":7})"}) {
+    CAPTURE(hello);
+    JsonDocument reply;
+    REQUIRE_FALSE(deserializeJson(reply, core.receive(hello)));
+    CHECK(reply["type"] == "hello_reply");
+    CHECK(reply["protocol"] == 0);
   }
 }

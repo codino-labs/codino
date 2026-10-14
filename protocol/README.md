@@ -9,7 +9,7 @@ v0 covers the handshake, session upsert, session remove and heartbeat. Later kin
 - Transport: USB CDC serial on a Device, stdin/stdout on the terminal Virtual Device.
 - Every message is one JSON object on one line, UTF-8, terminated by `\n` (newline-delimited JSON). A trailing `\r` is tolerated.
 - Every message has a string field `type`.
-- Receivers ignore unknown fields, unknown `type`s and lines that are not valid JSON. A message missing a required field, or carrying an invalid value, is ignored as a whole. This keeps an older Device usable by a newer Host for everything the Device already understands.
+- Receivers ignore unknown fields, unknown `type`s and lines that are not valid JSON. Senders always send every field listed for a message. A receiver ignores a message as a whole when a field it needs is missing or invalid; each message below says which fields a v0 Device needs. This keeps an older Device usable by a newer Host for everything the Device already understands.
 - Times are Unix milliseconds on the Host clock. The Device has no wall clock; it relates Host times to its own clock through `host_time` in `hello` and `heartbeat`.
 
 ## Handshake
@@ -17,6 +17,8 @@ v0 covers the handshake, session upsert, session remove and heartbeat. Later kin
 The Host opens the link with `hello`. The Device answers with `hello_reply`. The Host claims a port only after a valid reply, and refuses to drive a Device whose `protocol` differs from its own (it surfaces "update firmware" instead).
 
 ### `hello` (Host → Device)
+
+A Device answers every `hello`, whatever its fields, so that a Host speaking any protocol version learns which version the Device speaks.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -59,7 +61,7 @@ Creates the Agent Session if the id is new, otherwise replaces its fields.
 | `state_entered` | integer | Host time the session entered `state`. |
 | `tile` | integer | Tile slot assigned by the Host, starting at 0. |
 
-The Host always sends every field. A v0 Device needs only `id` (a non-empty string) and `state`, and ignores an upsert without them.
+A v0 Device needs `id` (a non-empty string) and a valid `state`.
 
 ### `session_remove`
 
@@ -77,7 +79,7 @@ Tells the Device the Host is alive. Without one for the Disconnected timeout, th
 
 ## Rendering in v0
 
-The Device shows the Aggregate State as one solid color across the whole matrix. The most urgent Session State wins: Awaiting Input > Error > Done > Working > Idle. With no sessions the matrix is dark. Themes, Layouts with Tiles, Escalation and Disconnected come later.
+The Device shows the Aggregate State as one solid color across the whole matrix. The most urgent Session State wins: Awaiting Input > Error > Done > Working > Idle. With no sessions the matrix is dark. Themes, Layouts with Tiles, Escalation, Disconnected and enforcing the Hardware Profile's `brightness_cap` come later.
 
 ## Fixtures
 

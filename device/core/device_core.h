@@ -17,8 +17,8 @@ enum class SessionState { Idle, Working, AwaitingInput, Done, Error };
 struct Rgb {
   uint8_t r = 0, g = 0, b = 0;
 
-  friend bool operator==(Rgb a, Rgb b) { return a.r == b.r && a.g == b.g && a.b == b.b; }
-  friend bool operator!=(Rgb a, Rgb b) { return !(a == b); }
+  friend bool operator==(Rgb lhs, Rgb rhs) { return lhs.r == rhs.r && lhs.g == rhs.g && lhs.b == rhs.b; }
+  friend bool operator!=(Rgb lhs, Rgb rhs) { return !(lhs == rhs); }
 };
 
 // Describes a physical build. Flashed with the firmware; reported in the
@@ -51,8 +51,12 @@ class PixelBuffer {
   uint8_t width() const { return width_; }
   uint8_t height() const { return height_; }
   Rgb at(uint8_t x, uint8_t y) const { return pixels_[y * width_ + x]; }
-  void set(uint8_t x, uint8_t y, Rgb color) { pixels_[y * width_ + x] = color; }
   void fill(Rgb color) { pixels_.assign(pixels_.size(), color); }
+
+  friend bool operator==(const PixelBuffer& lhs, const PixelBuffer& rhs) {
+    return lhs.width_ == rhs.width_ && lhs.height_ == rhs.height_ && lhs.pixels_ == rhs.pixels_;
+  }
+  friend bool operator!=(const PixelBuffer& lhs, const PixelBuffer& rhs) { return !(lhs == rhs); }
 
  private:
   uint8_t width_;
@@ -79,7 +83,9 @@ class DeviceCore {
 
   HardwareProfile profile_;
   std::string firmwareVersion_;
-  const Clock& clock_;
+  // Not read yet: time-based rendering (Escalation, Disconnected) arrives in
+  // later slices. [[maybe_unused]] keeps clang's -Wunused-private-field quiet.
+  [[maybe_unused]] const Clock& clock_;
   PixelBuffer frame_;
   std::map<std::string, SessionState> sessions_;
 };

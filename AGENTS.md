@@ -57,6 +57,12 @@ Demo: pipe the fixtures into the terminal Virtual Device. The matrix goes dark �
 make -C device && cat protocol/fixtures/{hello,session-upsert,heartbeat,session-remove}.jsonl | device/build/virtual-device
 ```
 
+To see every Session State win the Aggregate State in turn (Idle → Working → Done → Error → Awaiting Input):
+
+```sh
+for s in idle working done error awaiting_input; do echo "{\"type\":\"session_upsert\",\"id\":\"$s\",\"state\":\"$s\"}"; done | device/build/virtual-device
+```
+
 ## Agent skills
 
 ### Issue tracker

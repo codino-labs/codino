@@ -11,7 +11,6 @@
 #include <cstring>
 #include <iostream>
 #include <string>
-#include <vector>
 
 #include "device_core.h"
 
@@ -32,14 +31,28 @@ class SteadyClock : public device::Clock {
 
 // LEDs at low values still glow visibly; a terminal cell does not. Lift dark
 // channels with a square-root curve so dim states stay readable on screen.
-int toScreen(uint8_t channel) {
+int liftForTerminal(uint8_t channel) {
   return static_cast<int>(std::lround(std::sqrt(channel / 255.0) * 255.0));
 }
 
-void draw(const device::PixelBuffer& frame, const std::string& cause) {
+// The input line shown above a frame: control bytes (ANSI escapes, a CR from
+// CRLF) are replaced so a message cannot drive the terminal, and long lines are
+// cut on a UTF-8 character boundary.
+std::string caption(const std::string& line) {
+  constexpr size_t kMax = 72;
   std::string out;
-  out += "\x1b[2m> " + (cause.size() > 72 ? cause.substr(0, 69) + "..." : cause) + "\x1b[0m\n";
-  char cell[48];
+  for (size_t i = 0; i < line.size(); ++i) {
+    const unsigned char byte = static_cast<unsigned char>(line[i]);
+    const bool startsCharacter = (byte & 0xC0) != 0x80;
+    if (out.size() >= kMax && startsCharacter) return out + "...";
+    out += (byte < 0x20 || byte == 0x7F) ? '?' : line[i];
+  }
+  return out;
+}
+
+void draw(const device::PixelBuffer& frame, const std::string& cause) {
+  std::string out = "\x1b[2m> " + caption(cause) + "\x1b[0m\n";
+  char pixelText[48];
   for (uint8_t y = 0; y < frame.height(); ++y) {
     out += "  ";
     for (uint8_t x = 0; x < frame.width(); ++x) {
@@ -47,9 +60,9 @@ void draw(const device::PixelBuffer& frame, const std::string& cause) {
       if (c == device::Rgb{}) {
         out += "\x1b[38;5;238m\xc2\xb7\xc2\xb7";  // "··" for an unlit LED
       } else {
-        std::snprintf(cell, sizeof cell, "\x1b[38;2;%d;%d;%dm\xe2\x96\x88\xe2\x96\x88",
-                      toScreen(c.r), toScreen(c.g), toScreen(c.b));  // "██"
-        out += cell;
+        std::snprintf(pixelText, sizeof pixelText, "\x1b[38;2;%d;%d;%dm\xe2\x96\x88\xe2\x96\x88",
+                      liftForTerminal(c.r), liftForTerminal(c.g), liftForTerminal(c.b));  // "██"
+        out += pixelText;
       }
     }
     out += "\x1b[0m\n";
@@ -58,11 +71,20 @@ void draw(const device::PixelBuffer& frame, const std::string& cause) {
   std::fflush(stderr);
 }
 
-std::vector<device::Rgb> pixelsOf(const device::PixelBuffer& frame) {
-  std::vector<device::Rgb> pixels;
-  for (uint8_t y = 0; y < frame.height(); ++y)
-    for (uint8_t x = 0; x < frame.width(); ++x) pixels.push_back(frame.at(x, y));
-  return pixels;
+// Defaults to the reference build (Waveshare ESP32-S3-Matrix, built-in 8x8),
+// the same Hardware Profile as protocol/fixtures/hello-reply.jsonl.
+device::HardwareProfile referenceProfile() {
+  device::HardwareProfile p;
+  p.width = 8;
+  p.height = 8;
+  p.dataPin = 14;
+  p.serpentine = false;
+  p.colorOrder = "RGB";
+  p.brightnessCap = 48;
+  p.currentCapMa = 300;
+  p.button = false;
+  p.imu = true;
+  return p;
 }
 
 bool parseSize(const char* text, device::HardwareProfile& profile) {
@@ -78,7 +100,7 @@ bool parseSize(const char* text, device::HardwareProfile& profile) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  device::HardwareProfile profile;  // 8x8 unless --size says otherwise
+  device::HardwareProfile profile = referenceProfile();
   for (int i = 1; i < argc; ++i) {
     if (std::strcmp(argv[i], "--size") == 0 && i + 1 < argc && parseSize(argv[i + 1], profile)) {
       ++i;
@@ -91,8 +113,8 @@ int main(int argc, char** argv) {
   SteadyClock clock;
   device::DeviceCore core(profile, kFirmwareVersion, clock);
 
-  auto shown = pixelsOf(core.render());
-  draw(core.render(), "(start)");
+  device::PixelBuffer shown = core.render();
+  draw(shown, "(start)");
 
   std::string line;
   while (std::getline(std::cin, line)) {
@@ -100,10 +122,9 @@ int main(int argc, char** argv) {
     if (!reply.empty()) {
       std::cout << reply << '\n' << std::flush;
     }
-    const auto& frame = core.render();
-    auto now = pixelsOf(frame);
-    if (now != shown) {
-      shown = std::move(now);
+    const device::PixelBuffer& frame = core.render();
+    if (frame != shown) {
+      shown = frame;
       draw(frame, line);
     }
   }

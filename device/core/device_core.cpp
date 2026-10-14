@@ -6,37 +6,34 @@ namespace device {
 
 namespace {
 
-bool parseSessionState(std::string_view text, SessionState& out) {
-  if (text == "idle") out = SessionState::Idle;
-  else if (text == "working") out = SessionState::Working;
-  else if (text == "awaiting_input") out = SessionState::AwaitingInput;
-  else if (text == "done") out = SessionState::Done;
-  else if (text == "error") out = SessionState::Error;
-  else return false;
-  return true;
+// Everything the core knows about each Session State, in one place.
+// `urgency`: higher wins the Aggregate State (Awaiting Input > Error > Done >
+// Working > Idle). `color`: the v0 solid color for the whole matrix.
+struct SessionStateInfo {
+  SessionState state;
+  const char* wireName;
+  int urgency;
+  Rgb color;
+};
+
+constexpr SessionStateInfo kSessionStates[] = {
+    {SessionState::Idle, "idle", 0, {16, 16, 24}},
+    {SessionState::Working, "working", 1, {0, 90, 255}},
+    {SessionState::Done, "done", 2, {0, 200, 60}},
+    {SessionState::Error, "error", 3, {255, 0, 0}},
+    {SessionState::AwaitingInput, "awaiting_input", 4, {255, 150, 0}},
+};
+
+const SessionStateInfo* findByWireName(std::string_view name) {
+  for (const auto& info : kSessionStates)
+    if (name == info.wireName) return &info;
+  return nullptr;
 }
 
-// Higher is more urgent: Awaiting Input > Error > Done > Working > Idle.
-int urgency(SessionState state) {
-  switch (state) {
-    case SessionState::Idle: return 0;
-    case SessionState::Working: return 1;
-    case SessionState::Done: return 2;
-    case SessionState::Error: return 3;
-    case SessionState::AwaitingInput: return 4;
-  }
-  return 0;
-}
-
-Rgb colorFor(SessionState state) {
-  switch (state) {
-    case SessionState::Idle: return {16, 16, 24};
-    case SessionState::Working: return {0, 90, 255};
-    case SessionState::AwaitingInput: return {255, 150, 0};
-    case SessionState::Done: return {0, 200, 60};
-    case SessionState::Error: return {255, 0, 0};
-  }
-  return {};
+const SessionStateInfo& infoFor(SessionState state) {
+  for (const auto& info : kSessionStates)
+    if (info.state == state) return info;
+  return kSessionStates[0];
 }
 
 }  // namespace
@@ -56,9 +53,9 @@ std::string DeviceCore::receive(std::string_view line) {
     return helloReply();
   } else if (type == "session_upsert") {
     std::string_view id = message["id"] | "";
-    SessionState state;
-    if (id.empty() || !parseSessionState(message["state"] | "", state)) return {};
-    sessions_[std::string(id)] = state;
+    const SessionStateInfo* state = findByWireName(message["state"] | "");
+    if (id.empty() || state == nullptr) return {};
+    sessions_[std::string(id)] = state->state;
   } else if (type == "session_remove") {
     sessions_.erase(std::string(message["id"] | ""));
   }
@@ -88,7 +85,7 @@ std::string DeviceCore::helloReply() const {
 SessionState DeviceCore::aggregateState() const {
   SessionState aggregate = SessionState::Idle;
   for (const auto& [id, state] : sessions_) {
-    if (urgency(state) > urgency(aggregate)) aggregate = state;
+    if (infoFor(state).urgency > infoFor(aggregate).urgency) aggregate = state;
   }
   return aggregate;
 }
@@ -97,7 +94,7 @@ const PixelBuffer& DeviceCore::render() {
   if (sessions_.empty()) {
     frame_.fill(Rgb{});
   } else {
-    frame_.fill(colorFor(aggregateState()));
+    frame_.fill(infoFor(aggregateState()).color);
   }
   return frame_;
 }

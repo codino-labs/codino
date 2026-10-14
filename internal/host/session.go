@@ -125,8 +125,8 @@ type livenessHandle struct {
 	guessed bool
 }
 
-// probed reports whether the handle may reap its session.
-func (l livenessHandle) probed() bool { return l.pid != 0 && !l.guessed }
+// reaps reports whether the handle may reap its session.
+func (l livenessHandle) reaps() bool { return l.pid != 0 && !l.guessed }
 
 // tracker is the Session Tracker: every Agent Session, keyed by session id.
 type tracker struct {
@@ -268,28 +268,39 @@ func (t *tracker) interrupt(id string, at, now time.Time) *session {
 		return nil
 	}
 	at = notAfter(at, now)
-	if at.After(s.lastEventAt) {
-		s.lastEventAt = at
-	}
+	s.seen(at)
 	s.enter(Idle, at)
 	return s
 }
 
-// approved returns a session Awaiting Input to Working when a tool started
-// at started (zero: none runs) after it began to wait: the human approved
-// the prompt, and the tool runs. A tool already running before (a
-// background task) is no approval. It returns the session when it changed.
-func (t *tracker) approved(id string, started, now time.Time) *session {
+// ApprovalTime is the least time a human takes to approve a permission
+// prompt: a tool starting sooner after the prompt is one Claude Code runs
+// alongside it, not the approved one.
+const ApprovalTime = time.Second
+
+// approvedToWorking returns a session Awaiting Input to Working when a tool
+// started at started (zero: none is in progress) at least ApprovalTime after
+// it began to wait: the human approved the prompt, and the tool runs. A tool
+// already going before (a background task) is no approval. It returns the
+// session when it changed.
+func (t *tracker) approvedToWorking(id string, started, now time.Time) *session {
 	s := t.sessions[id]
-	if s == nil || s.state != AwaitingInput || started.IsZero() || !started.After(s.stateEntered) {
+	if s == nil || s.state != AwaitingInput || started.IsZero() || started.Before(s.stateEntered.Add(ApprovalTime)) {
 		return nil
 	}
 	started = notAfter(started, now)
-	if started.After(s.lastEventAt) {
-		s.lastEventAt = started
-	}
+	s.seen(started)
 	s.enter(Working, started)
 	return s
+}
+
+// seen records an event of the session at at that no hook brought (an
+// interrupt, an approval, an Acknowledge on the Device): a hook stamped
+// before it, arriving later, is dropped.
+func (s *session) seen(at time.Time) {
+	if at.After(s.lastEventAt) {
+		s.lastEventAt = at
+	}
 }
 
 // decayDone returns to Idle every session that has been Done for decay by
@@ -308,10 +319,16 @@ func (t *tracker) decayDone(now time.Time, decay time.Duration) []*session {
 
 // staleToIdle returns a Working session to Idle when neither a hook nor its
 // transcript, last written at modified (zero when unknown), has shown any
-// activity for StaleAfter. It returns the session when it changed.
-func (t *tracker) staleToIdle(id string, modified, now time.Time) *session {
+// activity for StaleAfter, and no tool started since it began to work
+// (toolStarted, zero when none) is still in progress: a long build writes
+// nothing to the transcript until it ends. It returns the session when it
+// changed.
+func (t *tracker) staleToIdle(id string, modified, toolStarted, now time.Time) *session {
 	s := t.sessions[id]
 	if s == nil || s.state != Working || s.transcript == "" {
+		return nil
+	}
+	if !toolStarted.IsZero() && !toolStarted.Before(s.stateEntered) {
 		return nil
 	}
 	active := s.lastEventAt
@@ -327,9 +344,11 @@ func (t *tracker) staleToIdle(id string, modified, now time.Time) *session {
 
 // update is the handle after an event named pid, started at started (0 when
 // that hook couldn't read it), guessed or not: the same pid keeps its known
-// start time, and once the Agent has named it, a later guess of the same pid
-// doesn't make it a guess again.
+// start time, and a guess never replaces or demotes a pid the Agent named.
 func (l livenessHandle) update(pid int, started uint64, guessed bool) livenessHandle {
+	if guessed && l.pid != 0 && !l.guessed && pid != l.pid {
+		return l
+	}
 	if pid != l.pid {
 		return livenessHandle{pid: pid, started: started, guessed: guessed}
 	}
@@ -397,7 +416,7 @@ func (t *tracker) transcriptsToProbe() map[string]string {
 func (t *tracker) livenessToProbe() map[string]livenessHandle {
 	probe := map[string]livenessHandle{}
 	for id, s := range t.sessions {
-		if s.liveness.probed() {
+		if s.liveness.reaps() {
 			probe[id] = s.liveness
 		}
 	}

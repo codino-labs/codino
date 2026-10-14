@@ -274,3 +274,19 @@ func TestSessionWhosePIDCameFromTheAgentAfterAGuessIsReaped(t *testing.T) {
 
 	assertStates(t, sessionStates(t, dev.Received()), "working", "done", "removed")
 }
+
+func TestAGuessedPIDNeverReplacesOneTheAgentNamed(t *testing.T) {
+	clock := clockAt(recordingStart)
+	liveness := &fakeLiveness{clock: clock, exits: map[int]time.Time{100: clock.Now().Add(time.Second)}}
+	dev := newReferenceDevice(t)
+	h := host.New(clock, devices(dev), host.WithLivenessProbe(liveness))
+	defer h.Close()
+	h.Tick()
+	apply(t, h, host.Event{SessionID: "a", State: host.Working, PID: 100})
+	apply(t, h, host.Event{SessionID: "a", State: host.Done, PID: 4321, PIDGuessed: true})
+
+	clock.Advance(2 * time.Second)
+	h.Tick()
+
+	assertStates(t, sessionStates(t, dev.Received()), "working", "done", "removed")
+}

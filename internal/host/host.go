@@ -102,8 +102,8 @@ type Transcript struct {
 	// Ctrl-C, a denied permission or a rejected plan); zero when the latest
 	// turn wasn't interrupted.
 	Interrupted time.Time
-	// ToolStarted is when the latest tool the Agent still runs started;
-	// zero when none runs or it can't tell. A tool starting after a
+	// ToolStarted is when the latest tool still in progress started; zero
+	// when there is none or it can't tell. A tool starting after a
 	// permission prompt means the human approved it, which no hook reports
 	// until the tool finishes.
 	ToolStarted time.Time
@@ -362,10 +362,10 @@ func (h *Host) probe(p probeTargets) {
 	for id, tr := range read {
 		s := h.sessions.interrupt(id, tr.Interrupted, now)
 		if s == nil {
-			s = h.sessions.approved(id, tr.ToolStarted, now)
+			s = h.sessions.approvedToWorking(id, tr.ToolStarted, now)
 		}
 		if s == nil {
-			if s = h.sessions.staleToIdle(id, tr.Modified, now); s != nil {
+			if s = h.sessions.staleToIdle(id, tr.Modified, tr.ToolStarted, now); s != nil {
 				slog.Info("stale Working session back to Idle", "session", s.id, "stale_after", StaleAfter)
 			}
 		}
@@ -467,9 +467,7 @@ func (h *Host) acknowledgeAll() {
 	now := h.clock.Now()
 	for _, s := range h.sessions.ordered() {
 		if s.acknowledge(now) {
-			if now.After(s.lastEventAt) {
-				s.lastEventAt = now
-			}
+			s.seen(now)
 			h.send(upsert(s))
 		}
 	}

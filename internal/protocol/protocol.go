@@ -109,8 +109,8 @@ type RawModeExit struct {
 
 // PreviewEnter forces the Device into a Session State for the web UI's
 // preview (Host → Device): it shows what it would with a lone session that
-// entered State ElapsedMS ago, in place of its sessions and Raw Mode, until
-// PreviewExit.
+// entered State ElapsedMS ago, in place of its sessions and Raw Mode (except
+// while a session is Awaiting Input, which pre-empts it), until PreviewExit.
 type PreviewEnter struct {
 	Type      string `json:"type"`
 	State     string `json:"state"`

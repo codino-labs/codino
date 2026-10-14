@@ -141,13 +141,18 @@ type fakeTranscripts struct {
 	interrupted time.Time
 	// toolStarted is when a tool started running, reported from then on.
 	toolStarted time.Time
-	probed      []string
+	// frozen: the transcript was last written when the tool started.
+	frozen bool
+	probed []string
 }
 
 func (f *fakeTranscripts) Read(path string) host.Transcript {
 	f.probed = append(f.probed, path)
 	// Written along with every hook: only the interrupt is news.
 	tr := host.Transcript{Modified: f.clock.Now()}
+	if f.frozen {
+		tr.Modified = f.toolStarted
+	}
 	if !f.interrupted.IsZero() && !f.clock.Now().Before(f.interrupted) {
 		tr.Interrupted = f.interrupted
 	}

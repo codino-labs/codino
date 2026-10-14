@@ -60,8 +60,8 @@ func (t Transcripts) Read(path string) host.Transcript {
 	return tr
 }
 
-// toolStarted is when the newest output file of a tool the session of the
-// transcript at path runs was created; zero when there is none, or the
+// toolStarted is when the newest output file of a tool in progress in the
+// session of the transcript at path was created; zero when there is none, or the
 // platform keeps no creation time. Claude Code writes the output of every
 // Bash command it runs, foreground or background, to
 // <project>/<session>/tasks/<id>.output in its temporary directory,
@@ -91,7 +91,7 @@ func (t Transcripts) toolStarted(path string) time.Time {
 }
 
 // tempDirs are TempDirs, else claude-<uid> in the system's temporary
-// directory and in /tmp (none on Windows, where it is unverified).
+// directory and in /tmp (none on Windows, which has no uid).
 func (t Transcripts) tempDirs() []string {
 	if t.TempDirs != nil {
 		return t.TempDirs

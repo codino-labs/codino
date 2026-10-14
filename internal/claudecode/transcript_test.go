@@ -109,21 +109,21 @@ func claudeDirs(t *testing.T) (transcript, tasks, tmp string) {
 	return transcript, tasks, tmp
 }
 
-func runTool(t *testing.T, tasks, name string) {
+func startTool(t *testing.T, tasks, name string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(tasks, name+".output"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestTranscriptShowsWhenTheToolTheAgentRunsStarted(t *testing.T) {
-	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+func TestTranscriptShowsWhenTheAgentsToolInProgressStarted(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" { // birth_other.go
 		t.Skip("no file birth time on", runtime.GOOS)
 	}
 	transcript, tasks, tmp := claudeDirs(t)
 	// File times come from a coarser clock than time.Now.
 	before := time.Now().Add(-time.Second)
-	runTool(t, tasks, "bcoog5cpt")
+	startTool(t, tasks, "bcoog5cpt")
 	after := time.Now().Add(time.Second)
 
 	got := claudecode.Transcripts{TempDirs: []string{tmp}}.Read(transcript).ToolStarted
@@ -133,16 +133,16 @@ func TestTranscriptShowsWhenTheToolTheAgentRunsStarted(t *testing.T) {
 	}
 }
 
-func TestTranscriptWithNoRunningTool(t *testing.T) {
+func TestTranscriptWithNoToolInProgress(t *testing.T) {
 	transcript, _, tmp := claudeDirs(t)
 	// Another session of the same project runs one.
 	other := filepath.Join(tmp, "-tmp-spike-proj", "other-session", "tasks")
 	if err := os.MkdirAll(other, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	runTool(t, other, "b1")
+	startTool(t, other, "b1")
 
 	if got := (claudecode.Transcripts{TempDirs: []string{tmp}}).Read(transcript).ToolStarted; !got.IsZero() {
-		t.Fatalf("ToolStarted = %v with no tool running, want zero", got)
+		t.Fatalf("ToolStarted = %v with no tool in progress, want zero", got)
 	}
 }

@@ -73,3 +73,45 @@ func TestAToolStartingChangesOnlyASessionAwaitingInput(t *testing.T) {
 		})
 	}
 }
+
+func TestAnApprovedToolLongerThanTheStalenessThresholdKeepsTheSessionWorking(t *testing.T) {
+	// Nothing writes the transcript while the tool runs; its output file
+	// still being there is what shows it hasn't finished.
+	clock := clockAt(recordingStart)
+	transcripts := &fakeTranscripts{clock: clock}
+	dev := newReferenceDevice(t)
+	h := host.New(clock, devices(dev), host.WithTranscriptProbe(transcripts))
+	defer h.Close()
+	h.Tick()
+	apply(t, h, host.Event{SessionID: "a", State: host.AwaitingInput, Transcript: "/t/a.jsonl"})
+	clock.Advance(4 * time.Second)
+	transcripts.toolStarted = clock.Now()
+	transcripts.frozen = true // the transcript isn't written meanwhile
+
+	for elapsed := time.Duration(0); elapsed < host.StaleAfter+time.Minute; elapsed += time.Second {
+		clock.Advance(time.Second)
+		h.Tick()
+	}
+
+	assertStates(t, sessionStates(t, dev.Received()), "awaiting_input", "working")
+}
+
+func TestAToolStartingRightAfterThePromptIsNoApproval(t *testing.T) {
+	// A human takes longer than that to read the prompt: a tool starting
+	// within it is one Claude Code runs alongside, not the approved one.
+	clock := clockAt(recordingStart)
+	transcripts := &fakeTranscripts{clock: clock}
+	dev := newReferenceDevice(t)
+	h := host.New(clock, devices(dev), host.WithTranscriptProbe(transcripts))
+	defer h.Close()
+	h.Tick()
+	apply(t, h, host.Event{SessionID: "a", State: host.AwaitingInput, Transcript: "/t/a.jsonl"})
+	transcripts.toolStarted = clock.Now().Add(host.ApprovalTime - time.Millisecond)
+
+	for range 10 {
+		clock.Advance(time.Second)
+		h.Tick()
+	}
+
+	assertStates(t, sessionStates(t, dev.Received()), "awaiting_input")
+}

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -99,9 +100,9 @@ const (
 	colorKind
 )
 
-// setting is one Preference: its key, how it is written, how it is read
+// preference is one Preference: its key, how it is written, how it is read
 // from Preferences and set on them.
-type setting struct {
+type preference struct {
 	path []string
 	kind kind
 	get  func(p Preferences) value
@@ -109,11 +110,11 @@ type setting struct {
 	set func(p *Preferences, v value) error
 }
 
-func (s setting) key() string { return strings.Join(s.path, ".") }
+func (s preference) key() string { return strings.Join(s.path, ".") }
 
-// settings are every Preference but the pinned Project Colors, in the order
+// preferenceTable are every Preference but the pinned Project Colors, in the order
 // `codino get` lists them.
-var settings = []setting{
+var preferenceTable = []preference{
 	{
 		path: []string{"theme"}, kind: stringKind,
 		get: func(p Preferences) value { return value{kind: stringValue, text: p.Theme} },
@@ -165,22 +166,22 @@ var settings = []setting{
 		get: func(p Preferences) value { return value{kind: boolValue, flag: p.QuietMode} },
 		set: func(p *Preferences, v value) error { p.QuietMode = v.flag; return nil },
 	},
-	durationSetting([]string{"done_decay"}, func(p *Preferences) *time.Duration { return &p.DoneDecay },
+	durationPreference([]string{"done_decay"}, func(p *Preferences) *time.Duration { return &p.DoneDecay },
 		minDoneDecay, 0),
-	durationSetting([]string{"disconnected_timeout"}, func(p *Preferences) *time.Duration { return &p.DisconnectedTimeout },
+	durationPreference([]string{"disconnected_timeout"}, func(p *Preferences) *time.Duration { return &p.DisconnectedTimeout },
 		minDisconnectedTimeout, maxDisconnectedTimeout),
-	durationSetting([]string{"escalation", "faster"}, func(p *Preferences) *time.Duration { return &p.Escalation.Faster },
+	durationPreference([]string{"escalation", "faster"}, func(p *Preferences) *time.Duration { return &p.Escalation.Faster },
 		0, maxEscalation),
-	durationSetting([]string{"escalation", "takeover"}, func(p *Preferences) *time.Duration { return &p.Escalation.Takeover },
+	durationPreference([]string{"escalation", "takeover"}, func(p *Preferences) *time.Duration { return &p.Escalation.Takeover },
 		0, maxEscalation),
-	durationSetting([]string{"escalation", "steady"}, func(p *Preferences) *time.Duration { return &p.Escalation.Steady },
+	durationPreference([]string{"escalation", "steady"}, func(p *Preferences) *time.Duration { return &p.Escalation.Steady },
 		0, maxEscalation),
 }
 
-// durationSetting is a Preference written as a duration string ("30s",
+// durationPreference is a Preference written as a duration string ("30s",
 // "2m"), from min to max (0: no bound).
-func durationSetting(path []string, field func(p *Preferences) *time.Duration, min, max time.Duration) setting {
-	return setting{
+func durationPreference(path []string, field func(p *Preferences) *time.Duration, min, max time.Duration) preference {
+	return preference{
 		path: path, kind: durationKind,
 		get: func(p Preferences) value { return value{kind: stringValue, text: formatDuration(*field(&p))} },
 		set: func(p *Preferences, v value) error {
@@ -200,10 +201,10 @@ func durationSetting(path []string, field func(p *Preferences) *time.Duration, m
 	}
 }
 
-// pinSetting is the Preference pinning a Project Color to the repo root at
+// pinPreference is the Preference pinning a Project Color to the repo root at
 // root (as written; `~/` is the home directory).
-func pinSetting(root string) setting {
-	return setting{
+func pinPreference(root string) preference {
+	return preference{
 		path: []string{projectColorsTable, root}, kind: colorKind,
 		get: func(p Preferences) value {
 			canonical, _ := canonicalRoot(root)
@@ -225,19 +226,19 @@ func pinSetting(root string) setting {
 }
 
 // lookup finds the Preference at path.
-func lookup(path []string) (setting, error) {
+func lookup(path []string) (preference, error) {
 	if len(path) == 2 && path[0] == projectColorsTable {
-		return pinSetting(path[1]), nil
+		return pinPreference(path[1]), nil
 	}
-	for _, s := range settings {
-		if equal(s.path, path) {
+	for _, s := range preferenceTable {
+		if slices.Equal(s.path, path) {
 			return s, nil
 		}
 	}
 	if len(path) == 1 && (path[0] == "escalation" || path[0] == projectColorsTable) {
-		return setting{}, fmt.Errorf("%s is a table: give one of its keys, such as %s", path[0], exampleKey(path[0]))
+		return preference{}, fmt.Errorf("%s is a table: give one of its keys, such as %s", path[0], exampleKey(path[0]))
 	}
-	return setting{}, fmt.Errorf("unknown Preference %q (known: %s)", strings.Join(path, "."), knownKeys())
+	return preference{}, fmt.Errorf("unknown Preference %q (known: %s)", strings.Join(path, "."), knownKeys())
 }
 
 func exampleKey(table string) string {
@@ -248,8 +249,8 @@ func exampleKey(table string) string {
 }
 
 func knownKeys() string {
-	keys := make([]string, 0, len(settings)+1)
-	for _, s := range settings {
+	keys := make([]string, 0, len(preferenceTable)+1)
+	for _, s := range preferenceTable {
 		keys = append(keys, s.key())
 	}
 	return strings.Join(append(keys, projectColorsTable+".PATH"), ", ")
@@ -345,8 +346,8 @@ func fromDocument(doc document) (Preferences, error) {
 	return p, nil
 }
 
-// checkKind reports a value of the wrong TOML type for the setting.
-func checkKind(s setting, v value) error {
+// checkKind reports a value of the wrong TOML type for the preference.
+func checkKind(s preference, v value) error {
 	want := map[kind]valueKind{
 		stringKind: stringValue, durationKind: stringValue, colorKind: stringValue,
 		integerKind: integerValue, boolKind: boolValue,
@@ -376,18 +377,18 @@ func (p Preferences) validate() error {
 	return nil
 }
 
-// Setting is one Preference and its current value, as `codino get` shows it.
-type Setting struct {
+// Entry is one Preference and its current value, as `codino get` shows it.
+type Entry struct {
 	Key   string
 	Value string
 }
 
 // List returns every Preference with its value, the pinned Project Colors
 // last, by repo root.
-func (p Preferences) List() []Setting {
-	var all []Setting
-	for _, s := range settings {
-		all = append(all, Setting{Key: s.key(), Value: display(s.get(p))})
+func (p Preferences) List() []Entry {
+	var all []Entry
+	for _, s := range preferenceTable {
+		all = append(all, Entry{Key: s.key(), Value: display(s.get(p))})
 	}
 	roots := make([]string, 0, len(p.ProjectColors))
 	for root := range p.ProjectColors {
@@ -395,7 +396,7 @@ func (p Preferences) List() []Setting {
 	}
 	sort.Strings(roots)
 	for _, root := range roots {
-		all = append(all, Setting{Key: projectColorsTable + "." + root, Value: p.ProjectColors[root]})
+		all = append(all, Entry{Key: projectColorsTable + "." + root, Value: p.ProjectColors[root]})
 	}
 	return all
 }
@@ -428,7 +429,7 @@ func splitKey(key string) []string {
 }
 
 // parseArgument reads a value given on the command line for s.
-func parseArgument(s setting, text string) (value, error) {
+func parseArgument(s preference, text string) (value, error) {
 	switch s.kind {
 	case integerKind:
 		n, err := strconv.ParseInt(text, 10, 64)

@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 )
 
 // File is the config file at Path: canonical for the Preferences. Without
@@ -50,7 +51,7 @@ func (f File) read() (document, error) {
 }
 
 // List returns every Preference with its current value.
-func (f File) List() ([]Setting, error) {
+func (f File) List() ([]Entry, error) {
 	p, err := f.Load()
 	if err != nil {
 		return nil, err
@@ -126,7 +127,7 @@ func (f File) Unset(key string) error {
 // pinned Project Colors compare by canonical repo root, so "~/src/app" and
 // "/home/me/src/app" are one.
 func samePreference(a, b []string) bool {
-	if equal(a, b) {
+	if slices.Equal(a, b) {
 		return true
 	}
 	if len(a) != 2 || len(b) != 2 || a[0] != projectColorsTable || b[0] != projectColorsTable {

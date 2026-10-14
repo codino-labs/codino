@@ -105,6 +105,21 @@ func (h *Host) prepareShow(dev *devicelink.Device) {
 	}
 }
 
+// prepareRotatedShow renders the show for the claimed Device turned by
+// rotation, so a rotation Preference that turns the matrix sideways doesn't
+// scale the picture under h.mu.
+func (h *Host) prepareRotatedShow(rotation int) {
+	h.mu.Lock()
+	s, dev := h.showing, h.device
+	h.unlock()
+	if s == nil || dev == nil {
+		return
+	}
+	if size, ok := matrixOf(dev, rotation); ok {
+		s.framesFor(size)
+	}
+}
+
 // claimedMatrix is the matrix size of the claimed Device, if any.
 func (h *Host) claimedMatrix() (matrixSize, bool) {
 	h.mu.Lock()

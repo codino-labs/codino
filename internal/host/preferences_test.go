@@ -2,6 +2,7 @@ package host_test
 
 import (
 	"errors"
+	"maps"
 	"strings"
 	"sync"
 	"testing"
@@ -15,30 +16,32 @@ import (
 // Preferences to the Device on claiming it and whenever the file changes,
 // and applies its own (Done decay, pinned Project Colors).
 
-// fakeConfig is the config file as the Host reads it: tests change it by
+// fakePreferencesFile is the config file as the Host reads it: tests change it by
 // hand, or break it.
-type fakeConfig struct {
+type fakePreferencesFile struct {
 	mu  sync.Mutex
 	p   preferences.Preferences
 	err error
 }
 
-func newFakeConfig(change func(*preferences.Preferences)) *fakeConfig {
+func newFakePreferencesFile(change func(*preferences.Preferences)) *fakePreferencesFile {
 	p := preferences.Defaults()
 	if change != nil {
 		change(&p)
 	}
-	return &fakeConfig{p: p}
+	return &fakePreferencesFile{p: p}
 }
 
-func (c *fakeConfig) Load() (preferences.Preferences, error) {
+func (c *fakePreferencesFile) Load() (preferences.Preferences, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.p, c.err
+	p := c.p
+	p.ProjectColors = maps.Clone(p.ProjectColors) // the Host's from now on
+	return p, c.err
 }
 
 // Change edits the file.
-func (c *fakeConfig) Change(change func(*preferences.Preferences)) {
+func (c *fakePreferencesFile) Change(change func(*preferences.Preferences)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.err = nil
@@ -46,7 +49,7 @@ func (c *fakeConfig) Change(change func(*preferences.Preferences)) {
 }
 
 // Break makes the file invalid.
-func (c *fakeConfig) Break(err error) {
+func (c *fakePreferencesFile) Break(err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.err = err
@@ -54,7 +57,7 @@ func (c *fakeConfig) Break(err error) {
 
 // withPreferences is a Host whose config file sets what change does.
 func withPreferences(change func(*preferences.Preferences)) host.Option {
-	return host.WithPreferences(newFakeConfig(change))
+	return host.WithPreferences(newFakePreferencesFile(change))
 }
 
 // fixturePreferences are the Preferences protocol/fixtures/preferences.jsonl
@@ -105,10 +108,10 @@ func TestWithoutAConfigFileTheDefaultsArePushed(t *testing.T) {
 }
 
 func TestAChangedConfigFileReachesTheDeviceWithinAPoll(t *testing.T) {
-	config := newFakeConfig(nil)
-	h, dev, clock := claimedHost(t, host.WithPreferences(config))
+	file := newFakePreferencesFile(nil)
+	h, dev, clock := claimedHost(t, host.WithPreferences(file))
 
-	config.Change(func(p *preferences.Preferences) { p.QuietMode = true })
+	file.Change(func(p *preferences.Preferences) { p.QuietMode = true })
 	clock.Advance(host.PreferencesPollInterval - time.Millisecond)
 	h.Tick()
 	if got := preferencesPushes(since(dev, 2)); len(got) != 0 {
@@ -129,10 +132,10 @@ func TestAChangedConfigFileReachesTheDeviceWithinAPoll(t *testing.T) {
 }
 
 func TestAChangeOnlyTheHostUsesIsNotPushed(t *testing.T) {
-	config := newFakeConfig(nil)
-	h, dev, clock := claimedHost(t, host.WithPreferences(config))
+	file := newFakePreferencesFile(nil)
+	h, dev, clock := claimedHost(t, host.WithPreferences(file))
 
-	config.Change(func(p *preferences.Preferences) {
+	file.Change(func(p *preferences.Preferences) {
 		p.DoneDecay = time.Minute
 		p.ProjectColors = map[string]string{"/src/app": "#123456"}
 	})
@@ -145,10 +148,10 @@ func TestAChangeOnlyTheHostUsesIsNotPushed(t *testing.T) {
 }
 
 func TestAnInvalidConfigFileIsReportedAndIgnored(t *testing.T) {
-	config := newFakeConfig(func(p *preferences.Preferences) { p.Brightness = 40 })
-	h, dev, clock := claimedHost(t, host.WithPreferences(config))
+	file := newFakePreferencesFile(func(p *preferences.Preferences) { p.Brightness = 40 })
+	h, dev, clock := claimedHost(t, host.WithPreferences(file))
 
-	config.Break(errors.New("config.toml: line 3: brightness: want a percentage"))
+	file.Break(errors.New("config.toml: line 3: brightness: want a percentage"))
 	clock.Advance(host.PreferencesPollInterval)
 	h.Tick()
 
@@ -160,7 +163,7 @@ func TestAnInvalidConfigFileIsReportedAndIgnored(t *testing.T) {
 	}
 
 	// Fixed, the problem is gone and the change goes through.
-	config.Change(func(p *preferences.Preferences) { p.Brightness = 60 })
+	file.Change(func(p *preferences.Preferences) { p.Brightness = 60 })
 	clock.Advance(host.PreferencesPollInterval)
 	h.Tick()
 
@@ -172,10 +175,10 @@ func TestAnInvalidConfigFileIsReportedAndIgnored(t *testing.T) {
 }
 
 func TestAConfigFileInvalidFromTheStartLeavesTheDefaults(t *testing.T) {
-	config := newFakeConfig(nil)
-	config.Break(errors.New("config.toml: line 1: unknown Preference"))
+	file := newFakePreferencesFile(nil)
+	file.Break(errors.New("config.toml: line 1: unknown Preference"))
 
-	h, dev, _ := claimedHost(t, host.WithPreferences(config))
+	h, dev, _ := claimedHost(t, host.WithPreferences(file))
 
 	assertMessages(t, dev.Received(), []string{fixture(t, "hello.jsonl"), defaultPreferences})
 	if got := h.Status().PreferencesProblem; !strings.Contains(got, "unknown Preference") {
@@ -184,9 +187,9 @@ func TestAConfigFileInvalidFromTheStartLeavesTheDefaults(t *testing.T) {
 }
 
 func TestTheDoneDecayTimeFollowsTheConfigFile(t *testing.T) {
-	config := newFakeConfig(nil)
-	h, dev, clock := claimedHost(t, host.WithPreferences(config))
-	config.Change(func(p *preferences.Preferences) { p.DoneDecay = time.Minute })
+	file := newFakePreferencesFile(nil)
+	h, dev, clock := claimedHost(t, host.WithPreferences(file))
+	file.Change(func(p *preferences.Preferences) { p.DoneDecay = time.Minute })
 	clock.Advance(host.PreferencesPollInterval)
 	h.Tick()
 	apply(t, h, host.Event{SessionID: "a", State: host.Done})
@@ -200,15 +203,15 @@ func TestTheDoneDecayTimeFollowsTheConfigFile(t *testing.T) {
 }
 
 func TestPinningAProjectColorRecolorsTheRunningSessionsOfThatProject(t *testing.T) {
-	config := newFakeConfig(nil)
-	h, dev, clock := claimedHost(t, host.WithPreferences(config), host.WithProjectRoots(fakeRoots{"/src/app-wt": "/src/app"}))
+	file := newFakePreferencesFile(nil)
+	h, dev, clock := claimedHost(t, host.WithPreferences(file), host.WithProjectRoots(fakeRoots{"/src/app-wt": "/src/app"}))
 	apply(t, h,
 		host.Event{SessionID: "app", State: host.Working, Project: "/src/app-wt"},
 		host.Event{SessionID: "other", State: host.Working, Project: "/src/other"},
 	)
 	sent := len(dev.Received())
 
-	config.Change(func(p *preferences.Preferences) { p.ProjectColors = map[string]string{"/src/app": "#123456"} })
+	file.Change(func(p *preferences.Preferences) { p.ProjectColors = map[string]string{"/src/app": "#123456"} })
 	clock.Advance(host.PreferencesPollInterval)
 	h.Tick()
 
@@ -221,7 +224,7 @@ func TestPinningAProjectColorRecolorsTheRunningSessionsOfThatProject(t *testing.
 	}
 }
 
-func TestTheShowWaitsForTheConfiguredDisconnectedTimeoutBeforeEnteringRawModeAgain(t *testing.T) {
+func TestTheShowWaitsForTheDisconnectedTimeoutPreferenceBeforeEnteringRawModeAgain(t *testing.T) {
 	h, dev, clock := claimedHost(t, withPreferences(func(p *preferences.Preferences) {
 		p.DisconnectedTimeout = 10 * time.Second
 	}))

@@ -196,7 +196,7 @@ Sent after `hello_reply`, before the `session_upsert`s, on every claim, and agai
 | `layout` | string | `adaptive` or `aggregate` (Layout and Tiles, above). |
 | `rotation` | integer | `0`, `90`, `180` or `270`: degrees the picture is turned clockwise on the matrix. |
 | `quiet_mode` | bool | Show nothing but Awaiting Input (Rendering, above). |
-| `disconnected_timeout_ms` | integer ≥ 1000 | Host silence before Disconnected. |
+| `disconnected_timeout_ms` | integer ≥ 1000 | Host silence before Disconnected. The Host's config file takes 2 s at least, so one late heartbeat never shows Disconnected; the Device accepts any timeout a heartbeat a second keeps away. |
 | `escalation_faster_ms`, `escalation_takeover_ms`, `escalation_steady_ms` | integer | When each Escalation step starts (Escalation, above), in order: faster ≤ takeover ≤ steady (two at the same time skip the first of them). |
 
 A push is the whole set: a field the Device doesn't find takes the Device's default (`default`, 100, `adaptive`, 0, `false`, 5000, 30000, 120000, 600000, as the Host's defaults), not its previous value. A field present with an invalid value makes the Device ignore the whole message, which then doesn't count as hearing from the Host either.

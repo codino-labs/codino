@@ -3,6 +3,7 @@ package preferences
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -434,7 +435,7 @@ func (d document) end() int {
 // its table, or in a new table at the end of the file.
 func (d *document) add(path []string, v value) {
 	isHeader := func(l line, table []string) bool {
-		return l.kind == header && equal(l.path, table)
+		return l.kind == header && slices.Equal(l.path, table)
 	}
 	if len(path) == 1 {
 		kv := formatKey(path[0]) + " = " + v.format()
@@ -482,16 +483,4 @@ func (d *document) add(path []string, v value) {
 		texts = append([]string{""}, texts...)
 	}
 	d.insert(at, texts...)
-}
-
-func equal(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

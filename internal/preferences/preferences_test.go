@@ -359,7 +359,7 @@ func TestGetGivesTheCurrentValueOfEveryPreference(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := []preferences.Setting{
+	want := []preferences.Entry{
 		{Key: "theme", Value: "default"},
 		{Key: "brightness", Value: "40"},
 		{Key: "layout", Value: "aggregate"},

@@ -287,7 +287,7 @@ TEST_CASE_FIXTURE(Device8x8, "a hello from any protocol version is answered with
 
 namespace {
 
-constexpr uint32_t kTimeout = device::DeviceCore::kDefaultDisconnectedTimeoutMs;
+constexpr uint32_t kTimeout = device::kDefaultDisconnectedTimeoutMs;
 
 // True when at least one pixel is lit and at least one is off: a pattern, not
 // a fill, so it can't be mistaken for any Session State's solid color.

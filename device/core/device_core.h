@@ -131,7 +131,6 @@ class PreferencesCache {
 class DeviceCore {
  public:
   static constexpr int kProtocolVersion = 0;
-  static constexpr uint32_t kDefaultDisconnectedTimeoutMs = device::kDefaultDisconnectedTimeoutMs;
 
   // `preferences` are the defaults; Preferences in `cache` (if any) win, so a
   // Device boots with the user's choices before a Host connects.

@@ -318,11 +318,11 @@ func runDaemon(paths daemon.Paths, args []string) error {
 		devices = devicelink.VirtualDevice{Path: path, Display: os.Stderr,
 			Args: []string{"--preferences-file", filepath.Join(paths.Dir, "virtual-device-preferences.jsonl")}}
 	}
-	config, err := configFile()
+	prefsFile, err := preferencesFile()
 	if err != nil {
 		return err
 	}
-	h := host.New(systemClock{}, devices, host.WithExitGrace(exitGrace), host.WithPreferences(config),
+	h := host.New(systemClock{}, devices, host.WithExitGrace(exitGrace), host.WithPreferences(prefsFile),
 		host.WithTranscriptProbe(claudecode.Transcripts{}), host.WithLivenessProbe(liveness.Probe{}),
 		host.WithProjectRoots(gitrepo.Roots{}))
 	defer h.Close()
@@ -330,7 +330,7 @@ func runDaemon(paths daemon.Paths, args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	slog.Info("Host Daemon listening", "socket", paths.Socket, "virtual_device", *virtual, "exit_grace", exitGrace,
-		"preferences", config.Path)
+		"preferences", prefsFile.Path)
 	if err := daemon.Run(ctx, ln, h); err != nil {
 		return err
 	}

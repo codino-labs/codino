@@ -13,6 +13,9 @@ import (
 // ignored: the Host keeps the Preferences it has.
 func (h *Host) reloadPreferences() {
 	p, err := h.prefsSource.Load()
+	if err == nil {
+		h.prepareRotatedShow(p.Rotation)
+	}
 	h.mu.Lock()
 	defer h.unlock()
 	h.lastPrefsPoll = h.clock.Now()
@@ -39,7 +42,8 @@ func (h *Host) setPreferences(p preferences.Preferences) {
 	if preferencesPush(old) != preferencesPush(p) {
 		h.send(preferencesPush(p))
 		if sideways(old.Rotation) != sideways(p.Rotation) {
-			h.shownFrame = -1 // the show is scaled to the turned matrix
+			// The show, scaled to the turned matrix by prepareRotatedShow.
+			h.shownFrame = -1
 			h.sendShowFrame()
 		}
 	}

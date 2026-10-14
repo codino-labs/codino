@@ -1,0 +1,345 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Setup": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "UserPromptExpansion": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostToolBatch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "MessageDisplay": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "TaskCreated": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "TeammateIdle": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "InstructionsLoaded": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "ConfigChange": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "CwdChanged": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "DirectoryAdded": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "FileChanged": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PreModelSwitch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostModelSwitch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Elicitation": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "ElicitationResult": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOOK_LOGGER\"",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

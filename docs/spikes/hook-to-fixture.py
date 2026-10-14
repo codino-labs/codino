@@ -6,10 +6,11 @@ usage: hook-to-fixture.py <log.jsonl> <out.jsonl> <scenario> <description> <how>
 The fixture's first line is {"meta": {...}}; every other line is one hook call:
   {"t": seconds since the first hook, "event": ..., "liveness": {...}, "input": {...}}
 Machine-specific paths are rewritten to stable placeholders.
+Run it right after recording: claude_code_version is read from `claude --version` now.
 """
 import json
-import re
 import os
+import re
 import subprocess
 import sys
 import time
@@ -25,10 +26,11 @@ project_slug = project_dir.replace("/", "-").replace("_", "-").replace(".", "-")
 
 
 def scrub(s):
-    s = s.replace(project_slug, "-tmp-codino-spike-proj")
-    s = s.replace(project_dir, "/tmp/codino-spike/proj")
-    s = s.replace(os.path.dirname(project_dir), "/tmp/codino-spike")
-    s = s.replace(f"/tmp/claude-{os.getuid()}/", "/tmp/claude-uid/")
+    if project_dir:
+        s = s.replace(project_slug, "-tmp-spike-proj")
+        s = s.replace(project_dir, "/tmp/spike/proj")
+        s = s.replace(os.path.dirname(project_dir), "/tmp/spike")
+    s = s.replace(f"/tmp/claude-{os.getuid()}/", "/tmp/claude-uid/")  # Claude Code's Linux temp dir
     s = s.replace(home, "/home/user")
     user = os.environ.get("USER")
     return re.sub(rf"\b{re.escape(user)}\b", "user", s) if user else s
@@ -40,7 +42,7 @@ lines = [{"meta": {
     "how": how,
     "claude_code_version": version,
     "recorded": time.strftime("%Y-%m-%d", time.localtime(records[0]["ts"])),
-    "os": "linux",
+    "os": sys.platform,
     "note": note,
 }}]
 t0 = records[0]["ts"]

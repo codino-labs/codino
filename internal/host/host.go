@@ -5,6 +5,7 @@
 package host
 
 import (
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -27,21 +28,64 @@ type Host struct {
 	// tickMu keeps Ticks from overlapping, so only one claim runs at a time.
 	tickMu sync.Mutex
 
+	// mu guards the fields below. Take it with h.mu.Lock and release it with
+	// h.unlock, which closes the Devices dropped meanwhile.
 	mu       sync.Mutex
 	sessions *tracker
 	device   *devicelink.Device
+	// dropped are Devices to close once mu is released: closing a hung
+	// Device can block for a second, which must not stall events.
+	dropped []*devicelink.Device
 	// lastHeartbeat is when the Device last heard from the Host.
 	lastHeartbeat time.Time
 	// deviceProblem is why the last claim failed, at lastFailedClaim.
 	deviceProblem   string
 	lastFailedClaim time.Time
 	closed          bool
+
+	exitGrace time.Duration
+	// emptySince is when the last session ended (or the Host started without
+	// any); zero while there are sessions.
+	emptySince time.Time
+	retired    chan struct{}
+	isRetired  bool
+}
+
+// DefaultExitGrace is how long the Host Daemon stays up with no sessions.
+const DefaultExitGrace = 5 * time.Minute
+
+// Option configures a Host.
+type Option func(*Host)
+
+// WithExitGrace sets how long the Host waits with no sessions before it
+// retires (default DefaultExitGrace).
+func WithExitGrace(d time.Duration) Option {
+	return func(h *Host) { h.exitGrace = d }
 }
 
 // New returns a Host that finds Devices through devices.
-func New(clock Clock, devices devicelink.Discoverer) *Host {
-	return &Host{clock: clock, devices: devices, sessions: newTracker()}
+func New(clock Clock, devices devicelink.Discoverer, opts ...Option) *Host {
+	h := &Host{
+		clock:      clock,
+		devices:    devices,
+		sessions:   newTracker(),
+		exitGrace:  DefaultExitGrace,
+		emptySince: clock.Now(),
+		retired:    make(chan struct{}),
+	}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
+
+// Retired is closed once the Host has had no sessions for the exit grace: the
+// Host Daemon should exit, and the next event spawns a new one.
+func (h *Host) Retired() <-chan struct{} { return h.retired }
+
+// ErrRetired means the Host has retired and takes no more events: the
+// client should deliver them to a new Host Daemon.
+var ErrRetired = errors.New("the Host Daemon is exiting")
 
 // Apply records one session event and forwards the change to the Device.
 func (h *Host) Apply(e Event) error {
@@ -49,8 +93,18 @@ func (h *Host) Apply(e Event) error {
 		return err
 	}
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	s, removed := h.sessions.apply(e, h.clock.Now())
+	defer h.unlock()
+	if h.isRetired {
+		return ErrRetired
+	}
+	now := h.clock.Now()
+	s, removed := h.sessions.apply(e, now)
+	switch empty := len(h.sessions.sessions) == 0; {
+	case !empty:
+		h.emptySince = time.Time{}
+	case h.emptySince.IsZero():
+		h.emptySince = now
+	}
 	switch {
 	case s == nil:
 	case removed:
@@ -69,6 +123,10 @@ func (h *Host) Tick() {
 	defer h.tickMu.Unlock()
 
 	h.mu.Lock()
+	if !h.isRetired && !h.emptySince.IsZero() && h.clock.Now().Sub(h.emptySince) >= h.exitGrace {
+		h.isRetired = true
+		close(h.retired)
+	}
 	h.dropGoneDevice()
 	if h.device != nil {
 		if now := h.clock.Now(); now.Sub(h.lastHeartbeat) >= HeartbeatInterval {
@@ -78,7 +136,7 @@ func (h *Host) Tick() {
 	}
 	look := h.device == nil && !h.closed &&
 		(h.lastFailedClaim.IsZero() || h.clock.Now().Sub(h.lastFailedClaim) >= ClaimRetryInterval)
-	h.mu.Unlock()
+	h.unlock()
 	if look {
 		h.claim()
 	}
@@ -95,7 +153,7 @@ func (h *Host) claim() {
 	now := h.clock.Now()
 	dev, err := devicelink.Claim(h.devices.Candidates(), now)
 	h.mu.Lock()
-	defer h.mu.Unlock()
+	defer h.unlock()
 	if err != nil {
 		if problem := err.Error(); problem != h.deviceProblem {
 			slog.Info("no Device claimed", "problem", problem)
@@ -105,7 +163,7 @@ func (h *Host) claim() {
 		return
 	}
 	if h.closed {
-		dev.Close()
+		h.dropped = append(h.dropped, dev)
 		return
 	}
 	slog.Info("Device claimed", "device", dev.Name, "firmware", dev.HelloReply.Firmware)
@@ -128,7 +186,8 @@ func (h *Host) send(msg any) {
 		return
 	}
 	if err := h.device.Send(msg); err != nil {
-		h.dropGoneDevice()
+		slog.Info("Device dropped", "err", err)
+		h.drop()
 	}
 }
 
@@ -139,9 +198,25 @@ func (h *Host) dropGoneDevice() {
 	}
 	select {
 	case <-h.device.Gone():
-		h.device.Close()
-		h.device = nil
+		h.drop()
 	default:
+	}
+}
+
+// drop forgets the claimed Device and schedules its Close for h.unlock.
+// Callers hold h.mu.
+func (h *Host) drop() {
+	h.dropped = append(h.dropped, h.device)
+	h.device = nil
+}
+
+// unlock releases h.mu, then closes the Devices dropped while it was held.
+func (h *Host) unlock() {
+	dropped := h.dropped
+	h.dropped = nil
+	h.mu.Unlock()
+	for _, d := range dropped {
+		d.Close()
 	}
 }
 
@@ -152,10 +227,9 @@ func upsert(s *session) protocol.SessionUpsert {
 // Close releases the Device; the Host claims no other afterwards.
 func (h *Host) Close() {
 	h.mu.Lock()
-	defer h.mu.Unlock()
+	defer h.unlock()
 	h.closed = true
 	if h.device != nil {
-		h.device.Close()
-		h.device = nil
+		h.drop()
 	}
 }

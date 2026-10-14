@@ -2,7 +2,7 @@
 
 The wire protocol between the Host Daemon and a Device (or a Virtual Device). It is semantic (ADR-0001): the Host says what state each Agent Session is in, and the Device decides how that looks.
 
-v0 covers the handshake, session upsert, session remove and heartbeat. Later kinds from the v1 spec (Preferences push, acknowledge, Raw Mode, Theme and Sprite Pack upload, preview-state override) will be added here with their own fixtures.
+v0 covers the handshake, session upsert, session remove, heartbeat and Disconnected. Later kinds from the v1 spec (Preferences push, acknowledge, Raw Mode, Theme and Sprite Pack upload, preview-state override) will be added here with their own fixtures.
 
 ## Framing
 
@@ -19,6 +19,8 @@ The Host opens the link with `hello`. The Device answers with `hello_reply`. The
 ### `hello` (Host → Device)
 
 A Device answers every `hello`, whatever its fields, so that a Host speaking any protocol version learns which version the Device speaks.
+
+A `hello` starts a new link: the Device forgets every Agent Session it holds, and the Host follows a successful handshake with a `session_upsert` for every session it knows. Sessions from an earlier Host Daemon never linger.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -71,15 +73,24 @@ A v0 Device needs `id` (a non-empty string) and a valid `state`.
 
 ### `heartbeat`
 
-Tells the Device the Host is alive. Without one for the Disconnected timeout, the Device shows Disconnected.
+Tells the Device the Host is alive. The Host sends one at least every second while it drives the Device.
 
 | Field | Type | Meaning |
 |---|---|---|
 | `host_time` | integer | Host time when sent. |
 
+## Disconnected
+
+Every message the Device can use (`hello`, `heartbeat`, a valid `session_upsert` or `session_remove`) tells it the Host is alive; lines it ignores don't. When nothing usable has arrived for the Disconnected timeout, the Device shows Disconnected. It counts from boot too, so a Device that never heard from a Host shows it as well.
+
+- The timeout is 5 seconds for now. It becomes a Preference, carried by the Preferences push.
+- Disconnected is not a Session State. It hides the sessions, because the Device no longer knows their state, and it never looks like Idle: v0 draws a dim diagonal line on a dark matrix.
+- The next usable message ends it. A heartbeat brings back the sessions the Device holds; a `hello` replaces them.
+- A Host Daemon that exits stops the heartbeats too, so the Device shows Disconnected until the next Host Daemon says `hello`.
+
 ## Rendering in v0
 
-The Device shows the Aggregate State as one solid color across the whole matrix. The most urgent Session State wins: Awaiting Input > Error > Done > Working > Idle. With no sessions the matrix is dark. Themes, Layouts with Tiles, Escalation, Disconnected and enforcing the Hardware Profile's `brightness_cap` come later.
+The Device shows the Aggregate State as one solid color across the whole matrix. The most urgent Session State wins: Awaiting Input > Error > Done > Working > Idle. With no sessions the matrix is dark. Themes, Layouts with Tiles, Escalation and enforcing the Hardware Profile's `brightness_cap` come later.
 
 ## Fixtures
 

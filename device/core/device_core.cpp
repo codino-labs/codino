@@ -42,14 +42,20 @@ DeviceCore::DeviceCore(HardwareProfile profile, std::string firmwareVersion, con
     : profile_(std::move(profile)),
       firmwareVersion_(std::move(firmwareVersion)),
       clock_(clock),
-      frame_(profile_.width, profile_.height) {}
+      frame_(profile_.width, profile_.height),
+      lastHostMessage_(clock.millis()) {}
 
 std::string DeviceCore::receive(std::string_view line) {
   JsonDocument message;
   if (deserializeJson(message, line.data(), line.size())) return {};
 
+  // Every message the Device can use proves the Host is alive.
   std::string_view type = message["type"] | "";
   if (type == "hello") {
+    // A new link: the Host follows with every session it knows, so sessions
+    // from an earlier Host Daemon must not linger.
+    sessions_.clear();
+    lastHostMessage_ = clock_.millis();
     return helloReply();
   } else if (type == "session_upsert") {
     std::string_view id = message["id"] | "";
@@ -57,8 +63,12 @@ std::string DeviceCore::receive(std::string_view line) {
     if (id.empty() || state == nullptr) return {};
     sessions_[std::string(id)] = state->state;
   } else if (type == "session_remove") {
-    sessions_.erase(std::string(message["id"] | ""));
+    if (!message["id"].is<const char*>()) return {};
+    sessions_.erase(std::string(message["id"].as<const char*>()));
+  } else if (type != "heartbeat") {
+    return {};
   }
+  lastHostMessage_ = clock_.millis();
   return {};
 }
 
@@ -90,8 +100,27 @@ SessionState DeviceCore::aggregateState() const {
   return aggregate;
 }
 
+// Unsigned subtraction keeps working when millis() wraps (every ~49 days).
+bool DeviceCore::disconnected() const {
+  return clock_.millis() - lastHostMessage_ >= kDefaultDisconnectedTimeoutMs;
+}
+
+// Disconnected is not a Session State: a dim slash across an otherwise dark
+// matrix, so it never reads as Idle (a full, dim fill) or as any other state.
+void DeviceCore::renderDisconnected() {
+  constexpr Rgb kDisconnected{20, 0, 28};
+  frame_.fill(Rgb{});
+  const int w = profile_.width, h = profile_.height;
+  for (int y = 0; y < h; ++y) {
+    const int x = (w - 1) - (y * w) / h;
+    frame_.set(static_cast<uint8_t>(x), static_cast<uint8_t>(y), kDisconnected);
+  }
+}
+
 const PixelBuffer& DeviceCore::render() {
-  if (sessions_.empty()) {
+  if (disconnected()) {
+    renderDisconnected();
+  } else if (sessions_.empty()) {
     frame_.fill(Rgb{});
   } else {
     frame_.fill(infoFor(aggregateState()).color);

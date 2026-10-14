@@ -171,3 +171,81 @@ func TestTheLockOutlivesServingUntilUnlock(t *testing.T) {
 	next := listen(t, paths)
 	next.Unlock()
 }
+
+func TestRunReturnsOnceTheHostRetires(t *testing.T) {
+	paths := daemon.PathsIn(filepath.Join(t.TempDir(), "rt"))
+	ln := listen(t, paths)
+	defer ln.Unlock()
+	h := host.New(fixedClock{time.UnixMilli(1760432400000)}, noDevices, host.WithExitGrace(0))
+	defer h.Close()
+
+	if err := daemon.Run(context.Background(), ln, h); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if _, err := (daemon.Client{Paths: paths}).Status(context.Background()); !errors.Is(err, daemon.ErrNotRunning) {
+		t.Errorf("Status after Run returned: err = %v, want ErrNotRunning", err)
+	}
+}
+
+func TestDeliverToARetiringDaemonSpawnsANewOne(t *testing.T) {
+	paths := daemon.PathsIn(filepath.Join(t.TempDir(), "rt"))
+	old := listen(t, paths)
+	retiring := host.New(fixedClock{time.UnixMilli(1760432400000)}, noDevices, host.WithExitGrace(0))
+	retiring.Tick()
+	ctx, stopOld := context.WithCancel(context.Background())
+	oldDone := make(chan error, 1)
+	go func() { oldDone <- daemon.Serve(ctx, old, retiring) }()
+	spawns := 0
+	client := daemon.Client{Paths: paths, Spawn: func() error {
+		spawns++
+		// The old daemon finishes exiting; the new one takes over.
+		stopOld()
+		<-oldDone
+		retiring.Close()
+		old.Unlock()
+		serve(t, listen(t, paths))
+		return nil
+	}}
+
+	if err := client.Deliver(context.Background(), host.Event{SessionID: "a", State: host.Working}); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+
+	st, err := client.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if spawns != 1 || len(st.Sessions) != 1 {
+		t.Errorf("spawned %d daemons, new daemon has %d sessions; want 1 and 1", spawns, len(st.Sessions))
+	}
+}
+
+func TestListenWithinWaitsForAnExitingDaemonToReleaseTheLock(t *testing.T) {
+	paths := daemon.PathsIn(filepath.Join(t.TempDir(), "rt"))
+	exiting := listen(t, paths)
+	got := make(chan error, 1)
+	go func() {
+		ln, err := daemon.ListenWithin(paths, time.Minute)
+		if err == nil {
+			ln.Unlock()
+		}
+		got <- err
+	}()
+
+	exiting.Unlock()
+
+	if err := <-got; err != nil {
+		t.Errorf("ListenWithin: %v", err)
+	}
+}
+
+func TestListenWithinGivesUpOnARunningDaemon(t *testing.T) {
+	paths := daemon.PathsIn(filepath.Join(t.TempDir(), "rt"))
+	running := listen(t, paths)
+	defer running.Unlock()
+
+	if _, err := daemon.ListenWithin(paths, 0); !errors.Is(err, daemon.ErrAlreadyRunning) {
+		t.Errorf("ListenWithin: err = %v, want ErrAlreadyRunning", err)
+	}
+}

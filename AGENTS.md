@@ -31,13 +31,13 @@ Run a single test with `go test -race ./internal/host -run 'TestReplug'`.
 
 ```
 cmd/codino/          the one binary: CLI (`event`, `status`) and the Host Daemon (`daemon`)
-internal/host/       Host core: Session Tracker, Aggregate State, Device Link driving; clock injected
+internal/host/       Host core: Session Tracker, Aggregate State, Device Link driving, heartbeat, exit grace; clock injected
 internal/devicelink/ handshake and claim; Discoverer seam (VirtualDevice now, USB serial later)
 internal/daemon/     local Unix socket: server, client (`Client.Deliver` spawns the daemon on demand)
 internal/protocol/   wire messages, as in protocol/README.md
 ```
 
-Every Agent's signals become `host.Event`s delivered with `daemon.Client.Deliver`: `codino event` does it from flags, the Claude Code Adapter will do it from hook JSON. Host core tests (`internal/host`) drive events and fake clock ticks in and assert on the protocol lines a fake Device receives, including the shared fixtures. The product name stays in `cmd/codino` (runtime directory name, `CODINO_VIRTUAL_DEVICE`).
+Every Agent's signals become `host.Event`s delivered with `daemon.Client.Deliver`: `codino event` does it from flags, the Claude Code Adapter will do it from hook JSON. Host core tests (`internal/host`) drive events and fake clock ticks in and assert on the protocol lines a fake Device receives, including the shared fixtures. The product name stays in `cmd/codino` (runtime directory name, `CODINO_VIRTUAL_DEVICE`, `CODINO_EXIT_GRACE`).
 
 ### Demo: `codino event` drives the Virtual Device
 
@@ -65,7 +65,9 @@ export CODINO_VIRTUAL_DEVICE=$PWD/device/build/virtual-device
 tail -f "$XDG_RUNTIME_DIR/codino/host.log"
 ```
 
-The socket, lock and log live in `$XDG_RUNTIME_DIR/codino/` (owner-only), or `$TMPDIR/codino-<uid>/` when `XDG_RUNTIME_DIR` is unset. The daemon doesn't exit by itself yet (#7): stop it with Ctrl-C or `pkill -f 'codino daemon'`.
+The socket, lock and log live in `$XDG_RUNTIME_DIR/codino/` (owner-only), or `$TMPDIR/codino-<uid>/` when `XDG_RUNTIME_DIR` is unset.
+
+The daemon exits after 5 minutes with no Agent Sessions (`--exit-grace`, or `CODINO_EXIT_GRACE=10s` so a spawned daemon inherits it); the next `codino event` spawns a new one. An exiting daemon refuses events with a `retiring` reply, so the client spawns the next daemon instead of losing them, and a new daemon waits for the old one to release the lock. Stop it early with Ctrl-C or `pkill -f 'codino daemon'`.
 
 ## Protocol
 
@@ -92,6 +94,12 @@ make -C device test
 ```
 
 Run a single test with `device/build/device_core_test -tc="*Aggregate State*"`.
+
+The terminal Virtual Device renders every 100 ms even without input, so Disconnected shows 5 s after the Host goes silent:
+
+```sh
+(cat protocol/fixtures/{hello,session-upsert}.jsonl; sleep 6; cat protocol/fixtures/heartbeat.jsonl) | device/build/virtual-device
+```
 
 Demo: pipe the fixtures into the terminal Virtual Device. The matrix goes dark → Awaiting Input → dark:
 

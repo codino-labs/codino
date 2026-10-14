@@ -54,12 +54,46 @@ func (c Client) Status(ctx context.Context) (host.Status, error) {
 // ErrNotRunning means no Host Daemon answered and none was spawned.
 var ErrNotRunning = errors.New("the Host Daemon is not running")
 
+// errUnavailable marks a failed call that another Host Daemon may answer:
+// none listens, or the one that answered is exiting.
+var errUnavailable = errors.New("no Host Daemon available")
+
+// call sends req and returns the reply. When no Host Daemon is available and
+// spawn is set, it spawns one (once) and retries until ctx is done.
 func (c Client) call(ctx context.Context, req Request, spawn func() error) (Response, error) {
 	ctx, cancel := context.WithTimeout(ctx, Timeout)
 	defer cancel()
-	conn, err := c.dial(ctx, spawn)
+	retry := time.NewTicker(20 * time.Millisecond)
+	defer retry.Stop()
+	spawned := false
+	for {
+		resp, err := c.roundTrip(ctx, req)
+		if !errors.Is(err, errUnavailable) {
+			return resp, err
+		}
+		if spawn == nil {
+			return Response{}, fmt.Errorf("%w: %v", ErrNotRunning, err)
+		}
+		if !spawned {
+			if err := spawn(); err != nil {
+				return Response{}, fmt.Errorf("spawn Host Daemon: %w", err)
+			}
+			spawned = true
+		}
+		select {
+		case <-ctx.Done():
+			return Response{}, fmt.Errorf("Host Daemon did not start: %w", err)
+		case <-retry.C:
+		}
+	}
+}
+
+// roundTrip makes one request on a new connection.
+func (c Client) roundTrip(ctx context.Context, req Request) (Response, error) {
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "unix", c.Paths.Socket)
 	if err != nil {
-		return Response{}, err
+		return Response{}, fmt.Errorf("%w: %v", errUnavailable, err)
 	}
 	defer conn.Close()
 	if deadline, ok := ctx.Deadline(); ok {
@@ -76,38 +110,13 @@ func (c Client) call(ctx context.Context, req Request, spawn func() error) (Resp
 	if err := json.Unmarshal(line, &resp); err != nil {
 		return Response{}, fmt.Errorf("reply from Host Daemon: %w", err)
 	}
+	if resp.Retiring {
+		return Response{}, fmt.Errorf("%w: the Host Daemon is exiting", errUnavailable)
+	}
 	if resp.Error != "" {
 		return Response{}, fmt.Errorf("Host Daemon: %s", resp.Error)
 	}
 	return resp, nil
-}
-
-// dial connects to the socket. When nothing listens and spawn is set, it
-// spawns a daemon and retries until ctx is done.
-func (c Client) dial(ctx context.Context, spawn func() error) (net.Conn, error) {
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "unix", c.Paths.Socket)
-	if err == nil {
-		return conn, nil
-	}
-	if spawn == nil {
-		return nil, fmt.Errorf("%w: %v", ErrNotRunning, err)
-	}
-	if err := spawn(); err != nil {
-		return nil, fmt.Errorf("spawn Host Daemon: %w", err)
-	}
-	retry := time.NewTicker(20 * time.Millisecond)
-	defer retry.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("Host Daemon did not start: %w", err)
-		case <-retry.C:
-		}
-		if conn, err = d.DialContext(ctx, "unix", c.Paths.Socket); err == nil {
-			return conn, nil
-		}
-	}
 }
 
 // SpawnCommand returns a Spawn that runs `executable args...` detached, with

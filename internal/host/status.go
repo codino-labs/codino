@@ -32,7 +32,7 @@ type DeviceConnection struct {
 // Status reports the sessions, by Tile slot, and the Device connection.
 func (h *Host) Status() Status {
 	h.mu.Lock()
-	defer h.mu.Unlock()
+	defer h.unlock()
 	h.dropGoneDevice()
 	st := Status{AggregateState: h.sessions.aggregateState(), Sessions: []SessionSummary{}}
 	for _, s := range h.sessions.ordered() {

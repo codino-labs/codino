@@ -158,7 +158,9 @@ func (d *Device) drain(lines *bufio.Reader) {
 // transports that support write deadlines.
 const WriteTimeout = time.Second
 
-// Send writes one protocol message. An error means the Device is gone.
+// Send writes one protocol message. An error means the Device is gone; the
+// caller closes it (closing can block on a hung Device, so it is the caller's
+// to schedule).
 func (d *Device) Send(msg any) error {
 	line, err := protocol.Encode(msg)
 	if err != nil {
@@ -168,13 +170,12 @@ func (d *Device) Send(msg any) error {
 		p.SetWriteDeadline(time.Now().Add(WriteTimeout))
 	}
 	if _, err := d.port.Write(line); err != nil {
-		d.Close()
 		return fmt.Errorf("send to %s: %w", d.Name, err)
 	}
 	return nil
 }
 
-// Gone is closed once the Device is unplugged, fails a write or is closed.
+// Gone is closed once the Device is unplugged or closed.
 func (d *Device) Gone() <-chan struct{} { return d.gone }
 
 // Close releases the Device.

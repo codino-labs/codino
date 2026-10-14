@@ -3,12 +3,14 @@ package host_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -40,6 +42,14 @@ type fakeDevice struct {
 	pending  []byte
 	closed   chan struct{}
 	once     sync.Once
+
+	// hang, when set, makes Close block until it is closed, like a Device
+	// that stopped answering; closing is closed when Close is entered.
+	hang    chan struct{}
+	closing chan struct{}
+	// failWrites makes every write fail, like a Device that stopped reading.
+	failWrites  atomic.Bool
+	closingOnce sync.Once
 }
 
 func newFakeDevice(reply ...string) *fakeDevice {
@@ -52,6 +62,9 @@ func newReferenceDevice(t *testing.T) *fakeDevice {
 }
 
 func (d *fakeDevice) Write(p []byte) (int, error) {
+	if d.failWrites.Load() {
+		return 0, io.ErrShortWrite
+	}
 	select {
 	case <-d.closed:
 		return 0, io.ErrClosedPipe
@@ -88,7 +101,23 @@ func (d *fakeDevice) Read(p []byte) (int, error) {
 
 func (d *fakeDevice) Close() error {
 	d.once.Do(func() { close(d.closed) })
+	if d.hang != nil {
+		d.closingOnce.Do(func() { close(d.closing) })
+		<-d.hang
+	}
 	return nil
+}
+
+// newHungDevice answers the handshake like the reference build, then hangs
+// when closed until the returned release is called.
+func newHungDevice(t *testing.T) (d *fakeDevice, release func()) {
+	d = newReferenceDevice(t)
+	d.hang = make(chan struct{})
+	d.closing = make(chan struct{})
+	var once sync.Once
+	release = func() { once.Do(func() { close(d.hang) }) }
+	t.Cleanup(release)
+	return d, release
 }
 
 // Received returns the protocol lines the Host sent, in order.
@@ -442,5 +471,145 @@ func TestAfterAFailedClaimTheHostWaitsBeforeLookingAgain(t *testing.T) {
 
 	if !h.Status().Device.Claimed {
 		t.Error("Device not claimed after the retry interval")
+	}
+}
+
+// retired reports whether the Host has retired, without waiting.
+func retired(h *host.Host) bool {
+	select {
+	case <-h.Retired():
+		return true
+	default:
+		return false
+	}
+}
+
+func TestHostRetiresAfterTheExitGraceWithNoSessions(t *testing.T) {
+	const grace = 5 * time.Minute
+	clock := clockAt(1760432400000)
+	h := host.New(clock, noDevices, host.WithExitGrace(grace))
+	defer h.Close()
+	apply(t, h, host.Event{SessionID: "a", State: host.Working})
+	clock.Advance(time.Hour)
+	apply(t, h, host.Event{SessionID: "a", End: true})
+
+	clock.Advance(grace - time.Millisecond)
+	h.Tick()
+	if retired(h) {
+		t.Fatal("retired before the exit grace was over")
+	}
+	clock.Advance(time.Millisecond)
+	h.Tick()
+
+	if !retired(h) {
+		t.Error("not retired after the exit grace with no sessions")
+	}
+}
+
+func TestHostStaysWhileSessionsRunAndTheGraceRestartsWhenTheLastOneEnds(t *testing.T) {
+	const grace = time.Minute
+	clock := clockAt(1760432400000)
+	h := host.New(clock, noDevices, host.WithExitGrace(grace))
+	defer h.Close()
+
+	clock.Advance(grace - time.Second) // started with no sessions
+	h.Tick()
+	apply(t, h, host.Event{SessionID: "a", State: host.Working})
+	for range 10 {
+		clock.Advance(grace)
+		h.Tick()
+	}
+	apply(t, h, host.Event{SessionID: "a", End: true})
+	clock.Advance(grace - time.Second)
+	h.Tick()
+
+	if retired(h) {
+		t.Error("retired with sessions running or before the grace after the last one ended")
+	}
+}
+
+func TestHostWithoutAnySessionRetiresAfterTheGraceFromStart(t *testing.T) {
+	clock := clockAt(1760432400000)
+	h := host.New(clock, noDevices)
+	defer h.Close()
+	apply(t, h, host.Event{SessionID: "never-started", End: true})
+
+	clock.Advance(host.DefaultExitGrace)
+	h.Tick()
+
+	if !retired(h) {
+		t.Error("not retired after the default exit grace")
+	}
+}
+
+func TestARetiredHostRefusesEventsSoTheClientSpawnsANewHostDaemon(t *testing.T) {
+	clock := clockAt(1760432400000)
+	dev := newReferenceDevice(t)
+	h := host.New(clock, devices(dev), host.WithExitGrace(time.Minute))
+	defer h.Close()
+	h.Tick()
+	clock.Advance(time.Minute)
+	h.Tick()
+	sent := len(dev.Received())
+
+	err := h.Apply(host.Event{SessionID: "a", State: host.Working})
+
+	if !errors.Is(err, host.ErrRetired) {
+		t.Errorf("Apply after retiring: err = %v, want ErrRetired", err)
+	}
+	if got := since(dev, sent); len(got) != 0 {
+		t.Errorf("a retired Host sent %q", got)
+	}
+	if n := len(h.Status().Sessions); n != 0 {
+		t.Errorf("%d sessions after a refused event, want 0", n)
+	}
+}
+
+// returnsPromptly fails the test when f doesn't return while a Device hangs
+// in Close. The bound only catches a deadlock; nothing here sleeps.
+func returnsPromptly(t *testing.T, what string, f func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { f(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s blocked while a Device was closing", what)
+	}
+}
+
+func TestClosingAHungDeviceDoesNotHoldUpTheHost(t *testing.T) {
+	tests := []struct {
+		name string
+		drop func(h *host.Host, dev *fakeDevice)
+	}{
+		{"the Host closes", func(h *host.Host, _ *fakeDevice) { h.Close() }},
+		{"a write fails", func(h *host.Host, dev *fakeDevice) {
+			dev.failWrites.Store(true)
+			h.Apply(host.Event{SessionID: "b", State: host.Done})
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clock := clockAt(1760432400000)
+			dev, release := newHungDevice(t)
+			h := host.New(clock, devices(dev))
+			h.Tick()
+			if !h.Status().Device.Claimed {
+				t.Fatal("Device not claimed")
+			}
+
+			go tt.drop(h, dev)
+			<-dev.closing
+
+			returnsPromptly(t, "Status", func() { h.Status() })
+			returnsPromptly(t, "Apply", func() {
+				if err := h.Apply(host.Event{SessionID: "a", State: host.Working}); err != nil {
+					t.Errorf("Apply: %v", err)
+				}
+			})
+			release()
+			h.Close()
+		})
 	}
 }

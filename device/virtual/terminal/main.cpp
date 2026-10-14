@@ -7,10 +7,14 @@
 // Usage: virtual-device [--size WxH]
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <iostream>
+#include <mutex>
 #include <string>
+#include <thread>
 
 #include "device_core.h"
 
@@ -87,6 +91,40 @@ device::HardwareProfile referenceProfile() {
   return p;
 }
 
+// Lines read from stdin on their own thread, so the main loop keeps
+// rendering (Disconnected, later animations) while the Host is silent.
+class LineQueue {
+ public:
+  void push(std::string line) {
+    std::lock_guard<std::mutex> lock(mu_);
+    lines_.push_back(std::move(line));
+    ready_.notify_one();
+  }
+  void close() {
+    std::lock_guard<std::mutex> lock(mu_);
+    closed_ = true;
+    ready_.notify_one();
+  }
+  enum class Result { Line, Timeout, Closed };
+  // Waits up to `wait` for the next line.
+  Result pop(std::string& line, std::chrono::milliseconds wait) {
+    std::unique_lock<std::mutex> lock(mu_);
+    ready_.wait_for(lock, wait, [this] { return !lines_.empty() || closed_; });
+    if (!lines_.empty()) {
+      line = std::move(lines_.front());
+      lines_.pop_front();
+      return Result::Line;
+    }
+    return closed_ ? Result::Closed : Result::Timeout;
+  }
+
+ private:
+  std::mutex mu_;
+  std::condition_variable ready_;
+  std::deque<std::string> lines_;
+  bool closed_ = false;
+};
+
 bool parseSize(const char* text, device::HardwareProfile& profile) {
   unsigned w = 0, h = 0;
   char extra = 0;
@@ -116,17 +154,33 @@ int main(int argc, char** argv) {
   device::PixelBuffer shown = core.render();
   draw(shown, "(start)");
 
+  LineQueue input;
+  std::thread reader([&input] {
+    std::string line;
+    while (std::getline(std::cin, line)) input.push(line);
+    input.close();
+  });
+
+  // Render at least this often without input, so time-driven frames show.
+  constexpr std::chrono::milliseconds kFrameInterval{100};
   std::string line;
-  while (std::getline(std::cin, line)) {
-    const std::string reply = core.receive(line);
-    if (!reply.empty()) {
-      std::cout << reply << '\n' << std::flush;
+  for (;;) {
+    const LineQueue::Result got = input.pop(line, kFrameInterval);
+    if (got == LineQueue::Result::Closed) break;
+    std::string cause = "(no message from the Host)";
+    if (got == LineQueue::Result::Line) {
+      const std::string reply = core.receive(line);
+      if (!reply.empty()) {
+        std::cout << reply << '\n' << std::flush;
+      }
+      cause = line;
     }
     const device::PixelBuffer& frame = core.render();
     if (frame != shown) {
       shown = frame;
-      draw(frame, line);
+      draw(frame, cause);
     }
   }
+  reader.join();
   return 0;
 }

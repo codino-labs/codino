@@ -59,6 +59,21 @@ func Listen(paths Paths) (*Listener, error) {
 	return &Listener{Listener: ln, lock: lock}, nil
 }
 
+// ListenWithin is Listen for a daemon that may be starting while the previous
+// one is still exiting: it waits up to wait for the daemon lock.
+func ListenWithin(paths Paths, wait time.Duration) (*Listener, error) {
+	deadline := time.Now().Add(wait)
+	for {
+		ln, err := Listen(paths)
+		if !errors.Is(err, ErrAlreadyRunning) || !time.Now().Before(deadline) {
+			return ln, err
+		}
+		time.Sleep(lockRetryInterval)
+	}
+}
+
+const lockRetryInterval = 50 * time.Millisecond
+
 // Unlock closes the listener if still open and releases the daemon lock.
 // Call it last.
 func (l *Listener) Unlock() {
@@ -107,7 +122,11 @@ func handle(req Request, h *host.Host) Response {
 	switch req.Op {
 	case OpEvents:
 		for _, e := range req.Events {
-			if err := h.Apply(e); err != nil {
+			err := h.Apply(e)
+			if errors.Is(err, host.ErrRetired) {
+				return Response{Retiring: true}
+			}
+			if err != nil {
 				return Response{Error: err.Error()}
 			}
 		}

@@ -26,4 +26,5 @@ add_test(NAME device_core_test COMMAND device_core_test)
 
 # Terminal Virtual Device.
 add_executable(virtual-device virtual/terminal/main.cpp)
-target_link_libraries(virtual-device PRIVATE device_core)
+find_package(Threads REQUIRED)
+target_link_libraries(virtual-device PRIVATE device_core Threads::Threads)

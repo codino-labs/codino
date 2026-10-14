@@ -13,10 +13,17 @@ import (
 const tickInterval = 100 * time.Millisecond
 
 // Run is the Host Daemon: it ticks h and serves clients on ln until ctx is
-// done.
+// done or h retires.
 func Run(ctx context.Context, ln net.Listener, h *host.Host) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	go func() {
+		select {
+		case <-h.Retired():
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 	ticking := make(chan struct{})
 	go func() {
 		defer close(ticking)

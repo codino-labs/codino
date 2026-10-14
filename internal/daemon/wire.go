@@ -23,6 +23,9 @@ type Request struct {
 // Response answers a Request.
 type Response struct {
 	// Error is set when the request was refused.
-	Error  string       `json:"error,omitempty"`
-	Status *host.Status `json:"status,omitempty"`
+	Error string `json:"error,omitempty"`
+	// Retiring means the daemon is exiting and applied none of the events:
+	// the client delivers them to a new Host Daemon.
+	Retiring bool         `json:"retiring,omitempty"`
+	Status   *host.Status `json:"status,omitempty"`
 }

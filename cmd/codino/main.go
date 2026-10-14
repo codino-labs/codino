@@ -4,7 +4,7 @@
 //	codino event --session ID --state STATE [--project PATH]
 //	codino event --session ID --end
 //	codino status [--json]
-//	codino daemon [--virtual-device PATH]
+//	codino daemon [--virtual-device PATH] [--exit-grace DURATION]
 package main
 
 import (
@@ -34,11 +34,15 @@ const name = "codino"
 // is an environment variable so a daemon spawned by `codino event` inherits it.
 const virtualDeviceEnv = "CODINO_VIRTUAL_DEVICE"
 
+// exitGraceEnv sets how long the Host Daemon stays up with no sessions, for a
+// daemon spawned by `codino event` too. Preferences replace it later.
+const exitGraceEnv = "CODINO_EXIT_GRACE"
+
 const usage = `usage:
   codino event --session ID --state STATE [--project PATH]
   codino event --session ID --end
   codino status [--json]
-  codino daemon [--virtual-device PATH]
+  codino daemon [--virtual-device PATH] [--exit-grace DURATION]
 
 STATE is one of: idle, working, awaiting_input, done, error.
 `
@@ -163,12 +167,23 @@ func runDaemon(paths daemon.Paths, args []string) error {
 	fs := newFlags("daemon")
 	virtual := fs.String("virtual-device", os.Getenv(virtualDeviceEnv),
 		"drive the Virtual Device binary at this path (default $"+virtualDeviceEnv+")")
+	exitGrace := host.DefaultExitGrace
+	if env := os.Getenv(exitGraceEnv); env != "" {
+		d, err := time.ParseDuration(env)
+		if err != nil || d < 0 {
+			return fmt.Errorf("$%s: want a duration such as 5m, got %q", exitGraceEnv, env)
+		}
+		exitGrace = d
+	}
+	fs.DurationVar(&exitGrace, "exit-grace", exitGrace,
+		"exit after this long with no sessions (default $"+exitGraceEnv+" or "+host.DefaultExitGrace.String()+")")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 
-	ln, err := daemon.Listen(paths)
+	// A daemon spawned while the previous one is still exiting waits for it.
+	ln, err := daemon.ListenWithin(paths, daemon.Timeout)
 	if errors.Is(err, daemon.ErrAlreadyRunning) {
 		slog.Info("another Host Daemon is running; exiting")
 		return nil
@@ -188,13 +203,21 @@ func runDaemon(paths daemon.Paths, args []string) error {
 		}
 		devices = devicelink.VirtualDevice{Path: path, Display: os.Stderr}
 	}
-	h := host.New(systemClock{}, devices)
+	h := host.New(systemClock{}, devices, host.WithExitGrace(exitGrace))
 	defer h.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	slog.Info("Host Daemon listening", "socket", paths.Socket, "virtual_device", *virtual)
-	return daemon.Run(ctx, ln, h)
+	slog.Info("Host Daemon listening", "socket", paths.Socket, "virtual_device", *virtual, "exit_grace", exitGrace)
+	if err := daemon.Run(ctx, ln, h); err != nil {
+		return err
+	}
+	select {
+	case <-h.Retired():
+		slog.Info("no Agent Sessions for the exit grace; exiting", "exit_grace", exitGrace)
+	default:
+	}
+	return nil
 }
 
 type systemClock struct{}

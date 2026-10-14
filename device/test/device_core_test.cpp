@@ -230,12 +230,13 @@ TEST_CASE_FIXTURE(Device8x8, "a line ending in CRLF is accepted") {
   CHECK(core.render() == loneSessionFrame("error"));
 }
 
-TEST_CASE_FIXTURE(Device8x8, "the solid Aggregate State color holds steady as time passes") {
+TEST_CASE_FIXTURE(Device8x8, "the solid Aggregate State color holds steady while the Host is alive") {
   core.receive(fixture("session-upsert.jsonl"));
   const device::PixelBuffer before = core.render();
 
-  for (int i = 0; i < 20; ++i) {
+  for (int i = 1; i <= 40; ++i) {
     clock.advance(250);
+    if (i % 4 == 0) core.receive(fixture("heartbeat.jsonl"));
     CHECK(core.render() == before);
   }
 }
@@ -248,4 +249,144 @@ TEST_CASE_FIXTURE(Device8x8, "a hello from any protocol version is answered with
     CHECK(reply["type"] == "hello_reply");
     CHECK(reply["protocol"] == 0);
   }
+}
+
+// --- Disconnected -----------------------------------------------------------
+
+namespace {
+
+constexpr uint32_t kTimeout = device::DeviceCore::kDefaultDisconnectedTimeoutMs;
+
+// True when at least one pixel is lit and at least one is off: a pattern, not
+// a fill, so it can't be mistaken for any Session State's solid color.
+bool isSparse(const device::PixelBuffer& frame) {
+  bool lit = false, off = false;
+  for (uint8_t y = 0; y < frame.height(); ++y)
+    for (uint8_t x = 0; x < frame.width(); ++x) (frame.at(x, y) == device::Rgb{} ? off : lit) = true;
+  return lit && off;
+}
+
+}  // namespace
+
+TEST_CASE_FIXTURE(Device8x8, "with no heartbeat for the Disconnected timeout the matrix shows Disconnected") {
+  core.receive(upsert("s1", "working"));
+
+  clock.advance(kTimeout);
+  const auto& frame = core.render();
+
+  CHECK(frame != loneSessionFrame("working"));
+  CHECK(isSparse(frame));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "heartbeats keep the Device connected well past the Disconnected timeout") {
+  core.receive(upsert("s1", "working"));
+
+  for (int i = 0; i < 10; ++i) {
+    clock.advance(kTimeout - 1);
+    core.receive(fixture("heartbeat.jsonl"));
+  }
+
+  CHECK(core.render() == loneSessionFrame("working"));
+}
+
+namespace {
+
+// The frame after the Host went silent with the given sessions on the Device.
+device::PixelBuffer disconnectedFrame(const std::vector<std::string>& states) {
+  FakeClock clock;
+  device::DeviceCore core(profile8x8(), "0.1.0", clock);
+  for (size_t i = 0; i < states.size(); ++i) core.receive(upsert("s" + std::to_string(i), states[i]));
+  clock.advance(kTimeout);
+  return core.render();
+}
+
+// True when no channel of any pixel is above 1/8 of full brightness.
+bool isDim(const device::PixelBuffer& frame) {
+  for (uint8_t y = 0; y < frame.height(); ++y)
+    for (uint8_t x = 0; x < frame.width(); ++x) {
+      const device::Rgb c = frame.at(x, y);
+      if (c.r > 32 || c.g > 32 || c.b > 32) return false;
+    }
+  return true;
+}
+
+}  // namespace
+
+TEST_CASE("Disconnected is dim and looks like no Session State, Idle included") {
+  const device::PixelBuffer disconnected = disconnectedFrame({});
+
+  CHECK(isDim(disconnected));
+  CHECK_FALSE(isDark(disconnected));
+  for (const char* state : kStatesByUrgency) {
+    CAPTURE(state);
+    CHECK(disconnected != loneSessionFrame(state));
+  }
+}
+
+TEST_CASE("Disconnected hides the sessions: the Device doesn't know their state any more") {
+  const device::PixelBuffer none = disconnectedFrame({});
+
+  CHECK(disconnectedFrame({"idle"}) == none);
+  CHECK(disconnectedFrame({"awaiting_input", "working"}) == none);
+}
+
+TEST_CASE("a Device that never heard from the Host shows Disconnected after the timeout") {
+  FakeClock clock;
+  device::DeviceCore core(profile8x8(), "0.1.0", clock);
+
+  clock.advance(kTimeout - 1);
+  CHECK(isDark(core.render()));
+  clock.advance(1);
+  CHECK(core.render() == disconnectedFrame({}));
+}
+
+TEST_CASE("the next heartbeat after Disconnected brings back the sessions") {
+  FakeClock clock;
+  device::DeviceCore core(profile8x8(), "0.1.0", clock);
+  core.receive(upsert("s1", "done"));
+  clock.advance(3 * kTimeout);
+  REQUIRE(core.render() == disconnectedFrame({}));
+
+  core.receive(fixture("heartbeat.jsonl"));
+
+  CHECK(core.render() == loneSessionFrame("done"));
+}
+
+TEST_CASE("lines the Device cannot use don't count as hearing from the Host") {
+  for (const std::string line : {"", "not json", R"({"type":"from_the_future"})",
+                                 R"({"type":"session_upsert","id":"s2","state":"sleeping"})",
+                                 R"({"type":"session_remove"})"}) {
+    CAPTURE(line);
+    FakeClock clock;
+    device::DeviceCore core(profile8x8(), "0.1.0", clock);
+    core.receive(upsert("s1", "working"));
+    clock.advance(kTimeout - 1);
+
+    core.receive(line);
+    clock.advance(1);
+
+    CHECK(core.render() == disconnectedFrame({}));
+  }
+}
+
+TEST_CASE("Disconnected survives the millisecond clock wrapping around") {
+  FakeClock clock;
+  clock.now = UINT32_MAX - 1000;
+  device::DeviceCore core(profile8x8(), "0.1.0", clock);
+  core.receive(upsert("s1", "working"));
+
+  clock.advance(2000);  // wraps
+  CHECK(core.render() == loneSessionFrame("working"));
+  clock.advance(kTimeout);
+  CHECK(core.render() == disconnectedFrame({}));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "a hello forgets the sessions of the previous Host Daemon") {
+  core.receive(upsert("old", "awaiting_input"));
+  clock.advance(3 * kTimeout);  // the Host Daemon exited
+
+  core.receive(fixture("hello.jsonl"));  // a new one starts
+  core.receive(upsert("new", "working"));
+
+  CHECK(core.render() == loneSessionFrame("working"));
 }

@@ -52,6 +52,7 @@ class PixelBuffer {
   uint8_t height() const { return height_; }
   Rgb at(uint8_t x, uint8_t y) const { return pixels_[y * width_ + x]; }
   void fill(Rgb color) { pixels_.assign(pixels_.size(), color); }
+  void set(uint8_t x, uint8_t y, Rgb color) { pixels_[y * width_ + x] = color; }
 
   friend bool operator==(const PixelBuffer& lhs, const PixelBuffer& rhs) {
     return lhs.width_ == rhs.width_ && lhs.height_ == rhs.height_ && lhs.pixels_ == rhs.pixels_;
@@ -67,6 +68,9 @@ class PixelBuffer {
 class DeviceCore {
  public:
   static constexpr int kProtocolVersion = 0;
+  // How long the Host may stay silent before the Device shows Disconnected.
+  // Becomes a Preference later.
+  static constexpr uint32_t kDefaultDisconnectedTimeoutMs = 5000;
 
   DeviceCore(HardwareProfile profile, std::string firmwareVersion, const Clock& clock);
 
@@ -83,11 +87,14 @@ class DeviceCore {
 
   HardwareProfile profile_;
   std::string firmwareVersion_;
-  // Not read yet: time-based rendering (Escalation, Disconnected) arrives in
-  // later slices. [[maybe_unused]] keeps clang's -Wunused-private-field quiet.
-  [[maybe_unused]] const Clock& clock_;
+  bool disconnected() const;
+  void renderDisconnected();
+
+  const Clock& clock_;
   PixelBuffer frame_;
   std::map<std::string, SessionState> sessions_;
+  // Clock time of the last message from the Host (boot until the first).
+  uint32_t lastHostMessage_;
 };
 
 }  // namespace device

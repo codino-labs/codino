@@ -73,11 +73,18 @@ func replay(t *testing.T, scenario string, opts ...host.Option) []string {
 
 func replayOn(t *testing.T, clock *fakeClock, scenario string, opts ...host.Option) []string {
 	t.Helper()
+	return replayThen(t, clock, recording(t, scenario), 0, opts...)
+}
+
+// replayThen replays calls like replayOn, after which the Host Daemon keeps
+// ticking for tail with no more hook calls.
+func replayThen(t *testing.T, clock *fakeClock, calls []recordedCall, tail time.Duration, opts ...host.Option) []string {
+	t.Helper()
 	dev := newReferenceDevice(t)
 	h := host.New(clock, devices(dev), opts...)
 	defer h.Close()
 	h.Tick()
-	for _, c := range recording(t, scenario) {
+	for _, c := range calls {
 		at := time.UnixMilli(recordingStart).Add(time.Duration(c.T * float64(time.Second)))
 		// The Host Daemon ticks between hook calls.
 		for clock.Now().Add(time.Second).Before(at) {
@@ -87,7 +94,44 @@ func replayOn(t *testing.T, clock *fakeClock, scenario string, opts ...host.Opti
 		clock.now = at
 		apply(t, h, hookCall(t, c, clock.Now())...)
 	}
+	for end := clock.Now().Add(tail); clock.Now().Before(end); {
+		clock.Advance(time.Second)
+		h.Tick()
+	}
 	return sessionStates(t, dev.Received())
+}
+
+// fakeLiveness is the fake liveness probe: each Agent, by pid, exits at a
+// scripted time.
+type fakeLiveness struct {
+	clock *fakeClock
+	// exits is when each pid's Agent exits; absent pids live forever.
+	exits map[int]time.Time
+	// started, when set, is the start time a live pid's Agent has: a
+	// different one means the pid was reused.
+	started map[int]uint64
+	probed  []int
+}
+
+func (f *fakeLiveness) Gone(pid int, started uint64) bool {
+	f.probed = append(f.probed, pid)
+	if exit, ok := f.exits[pid]; ok && !f.clock.Now().Before(exit) {
+		return true
+	}
+	if now, ok := f.started[pid]; ok && started != 0 && started != now {
+		return true
+	}
+	return false
+}
+
+// killedAfter returns a liveness probe under which the Agent of a recording
+// exits d after its last hook call.
+func killedAfter(t *testing.T, clock *fakeClock, scenario string, d time.Duration) *fakeLiveness {
+	t.Helper()
+	calls := recording(t, scenario)
+	last := calls[len(calls)-1]
+	at := time.UnixMilli(recordingStart).Add(time.Duration(last.T * float64(time.Second)))
+	return &fakeLiveness{clock: clock, exits: map[int]time.Time{last.Liveness.ClaudePID: at.Add(d)}}
 }
 
 // fakeTranscripts is the fake transcript probe: the human interrupts the
@@ -98,12 +142,14 @@ type fakeTranscripts struct {
 	probed      []string
 }
 
-func (f *fakeTranscripts) Interrupted(path string) (time.Time, bool) {
+func (f *fakeTranscripts) Read(path string) host.Transcript {
 	f.probed = append(f.probed, path)
-	if f.interrupted.IsZero() || f.clock.Now().Before(f.interrupted) {
-		return time.Time{}, false
+	// Written along with every hook: only the interrupt is news.
+	tr := host.Transcript{Modified: f.clock.Now()}
+	if !f.interrupted.IsZero() && !f.clock.Now().Before(f.interrupted) {
+		tr.Interrupted = f.interrupted
 	}
-	return f.interrupted, true
+	return tr
 }
 
 // interruptAfter returns a probe that shows the human interrupting the turn
@@ -188,11 +234,53 @@ func TestClaudeCodeSubagentsFoldIntoTheirParentSession(t *testing.T) {
 	assertStates(t, replay(t, "subagents-parallel"), "idle", "working", "done", "removed")
 }
 
-func TestClaudeCodeSessionsWithoutSessionEndStayUntilReaped(t *testing.T) {
-	// kill -9 fires no SessionEnd; reaping by process liveness is #8.
-	assertStates(t, replay(t, "killed-working-sigkill"), "idle", "working")
-	assertStates(t, replay(t, "killed-idle-sigkill"), "idle", "working", "done")
-	assertStates(t, replay(t, "sigterm-idle"), "idle", "working", "done", "removed")
+func TestClaudeCodeSessionKilledWithoutSessionEndIsReaped(t *testing.T) {
+	// kill -9 fires no SessionEnd: the Host notices the Agent is gone.
+	for scenario, want := range map[string][]string{
+		"killed-working-sigkill": {"idle", "working", "removed"},
+		"killed-idle-sigkill":    {"idle", "working", "done", "removed"},
+	} {
+		t.Run(scenario, func(t *testing.T) {
+			clock := clockAt(recordingStart)
+			liveness := killedAfter(t, clock, scenario, 3*time.Second)
+			assertStates(t, replayThen(t, clock, recording(t, scenario), 10*time.Second, host.WithLivenessProbe(liveness)), want...)
+		})
+	}
+}
+
+func TestClaudeCodeKilledSessionWithoutALivenessHandleFallsBackToIdle(t *testing.T) {
+	// No pid (CLAUDE_PID unset, no /proc): the session can't be reaped, but
+	// its quiet transcript stops it haunting the matrix as Working.
+	clock := clockAt(recordingStart)
+	calls := recording(t, "killed-working-sigkill")
+	last := time.UnixMilli(recordingStart).Add(time.Duration(calls[len(calls)-1].T * float64(time.Second)))
+	transcript := &quietTranscript{modified: last}
+	liveness := &fakeLiveness{clock: clock, exits: map[int]time.Time{calls[0].Liveness.ClaudePID: last}}
+	for i := range calls {
+		calls[i].Liveness.ClaudePID = 0
+	}
+
+	got := replayThen(t, clock, calls, host.StaleAfter+time.Second,
+		host.WithTranscriptProbe(transcript), host.WithLivenessProbe(liveness))
+
+	assertStates(t, got, "idle", "working", "idle")
+}
+
+func TestClaudeCodeSessionStaysWhileItsAgentLives(t *testing.T) {
+	clock := clockAt(recordingStart)
+	liveness := &fakeLiveness{clock: clock}
+	assertStates(t, replayThen(t, clock, recording(t, "killed-idle-sigkill"), time.Minute, host.WithLivenessProbe(liveness)),
+		"idle", "working", "done")
+	if len(liveness.probed) == 0 {
+		t.Fatal("the Agent's liveness was never probed")
+	}
+}
+
+func TestClaudeCodeSessionEndingNormallyIsRemovedOnce(t *testing.T) {
+	clock := clockAt(recordingStart)
+	liveness := killedAfter(t, clock, "sigterm-idle", 0)
+	assertStates(t, replayThen(t, clock, recording(t, "sigterm-idle"), 10*time.Second, host.WithLivenessProbe(liveness)),
+		"idle", "working", "done", "removed")
 }
 
 func TestClaudeCodeHookArrivingLateDoesNotUndoANewerState(t *testing.T) {

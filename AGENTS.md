@@ -31,14 +31,17 @@ Run a single test with `go test -race ./internal/host -run 'TestReplug'`.
 
 ```
 cmd/codino/          the one binary: CLI (`event`, `status`), the Host Daemon (`daemon`) and `hook` (internal, run by the plugin)
-internal/claudecode/ Claude Code Adapter: hook JSON → host.Events; transcript probe for interrupts (no hook fires)
-internal/host/       Host core: Session Tracker, Aggregate State, Device Link driving, heartbeat, exit grace; clock injected
+internal/claudecode/ Claude Code Adapter: hook JSON → host.Events; transcript probe (interrupts, last write)
+internal/host/       Host core: Session Tracker, Aggregate State, Device Link driving, heartbeat, exit grace, stuck-session cleanup; clock and probes injected
+internal/liveness/   liveness probe: is the Agent's pid still its process (signal 0; /proc start time on Linux)
 internal/devicelink/ handshake and claim; Discoverer seam (VirtualDevice now, USB serial later)
 internal/daemon/     local Unix socket: server, client (`Client.Deliver` spawns the daemon on demand)
 internal/protocol/   wire messages, as in protocol/README.md
 ```
 
-Every Agent's signals become `host.Event`s delivered with `daemon.Client.Deliver`: `codino event` does it from flags, `codino hook` from hook JSON through the Claude Code Adapter. Events carry the time the Agent signalled them (`At`); the Session Tracker drops one older than the last applied to its session, because async hooks race. Host core tests (`internal/host`) drive events and fake clock ticks in and assert on the protocol lines a fake Device receives, including the shared fixtures; `claudecode_replay_test.go` replays the hook spike recordings in `fixtures/hooks/claude-code/` through the Adapter. The product name stays in `cmd/codino` (runtime directory name, `CODINO_VIRTUAL_DEVICE`, `CODINO_EXIT_GRACE`).
+Every Agent's signals become `host.Event`s delivered with `daemon.Client.Deliver`: `codino event` does it from flags, `codino hook` from hook JSON through the Claude Code Adapter. Events carry the time the Agent signalled them (`At`); the Session Tracker drops one older than the last applied to its session, because async hooks race. Host core tests (`internal/host`) drive events and fake clock ticks in and assert on the protocol lines a fake Device receives, including the shared fixtures; `claudecode_replay_test.go` replays the hook spike recordings in `fixtures/hooks/claude-code/` through the Adapter.
+
+Stuck sessions (#8): once a second the Host probes, outside its lock, the liveness of every session with a pid (`LivenessProbe`) and the transcript of every Working/Awaiting Input session (`TranscriptProbe`). A session whose Agent is gone is removed, as if it had ended (kill -9 fires no SessionEnd); an interrupted turn goes back to Idle; a Working session with no hook and no transcript write for `host.StaleAfter` (15 min) falls back to Idle. The hook reads the Agent's start time (`liveness.Started`) while the Agent is certainly alive, so a reused pid reads as gone. A session without a pid is never reaped, only judged stale. Host core tests fake both probes (`fakeLiveness`, `fakeTranscripts`, `quietTranscript`). The product name stays in `cmd/codino` (runtime directory name, `CODINO_VIRTUAL_DEVICE`, `CODINO_EXIT_GRACE`).
 
 ### Demo: `codino event` drives the Virtual Device
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/codino-labs/codino/internal/claudecode"
+	"github.com/codino-labs/codino/internal/host"
 )
 
 // Transcript lines as Claude Code writes them (trimmed).
@@ -44,9 +45,8 @@ func TestTranscriptShowsTheHumanInterruptingTheLatestTurn(t *testing.T) {
 		"with a line still being copied": lines(promptLine, toolUseMarker) + `{"type":"cost-st`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			at, ok := claudecode.Transcripts{}.Interrupted(writeTranscript(t, content))
-			if !ok || !at.Equal(markerAt) {
-				t.Fatalf("Interrupted = %v, %v; want %v, true", at, ok, markerAt)
+			if at := (claudecode.Transcripts{}).Read(writeTranscript(t, content)).Interrupted; !at.Equal(markerAt) {
+				t.Fatalf("Interrupted = %v, want %v", at, markerAt)
 			}
 		})
 	}
@@ -60,20 +60,31 @@ func TestTranscriptWithoutAnInterruptedLatestTurn(t *testing.T) {
 		"not JSON":                   "garbage\n",
 	} {
 		t.Run(name, func(t *testing.T) {
-			if at, ok := (claudecode.Transcripts{}).Interrupted(writeTranscript(t, content)); ok {
-				t.Fatalf("Interrupted = %v, true; want false", at)
+			if at := (claudecode.Transcripts{}).Read(writeTranscript(t, content)).Interrupted; !at.IsZero() {
+				t.Fatalf("Interrupted = %v, want none", at)
 			}
 		})
 	}
-	if _, ok := (claudecode.Transcripts{}).Interrupted(filepath.Join(t.TempDir(), "missing.jsonl")); ok {
-		t.Fatal("a missing transcript shows an interrupt")
+	if got := (claudecode.Transcripts{}).Read(filepath.Join(t.TempDir(), "missing.jsonl")); got != (host.Transcript{}) {
+		t.Fatalf("a missing transcript reads %+v, want nothing", got)
 	}
 }
 
 func TestTranscriptInterruptFoundBeforeALargeBookkeepingEntry(t *testing.T) {
 	big := `{"type":"file-history-snapshot","snapshot":"` + strings.Repeat("x", 300_000) + `"}`
-	at, ok := claudecode.Transcripts{}.Interrupted(writeTranscript(t, lines(promptLine, toolUseMarker, big)))
-	if !ok || !at.Equal(markerAt) {
-		t.Fatalf("Interrupted = %v, %v; want %v, true", at, ok, markerAt)
+	if at := (claudecode.Transcripts{}).Read(writeTranscript(t, lines(promptLine, toolUseMarker, big))).Interrupted; !at.Equal(markerAt) {
+		t.Fatalf("Interrupted = %v, want %v", at, markerAt)
+	}
+}
+
+func TestTranscriptShowsWhenItWasLastWritten(t *testing.T) {
+	path := writeTranscript(t, lines(promptLine, assistantLine))
+	written := time.Date(2026, 10, 14, 8, 50, 0, 0, time.UTC)
+	if err := os.Chtimes(path, written, written); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := (claudecode.Transcripts{}).Read(path).Modified; !got.Equal(written) {
+		t.Fatalf("Modified = %v, want %v", got, written)
 	}
 }

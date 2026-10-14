@@ -7,11 +7,11 @@ import (
 	"io"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/codino-labs/codino/internal/claudecode"
 	"github.com/codino-labs/codino/internal/daemon"
+	"github.com/codino-labs/codino/internal/liveness"
 )
 
 // maxHookInput bounds what `codino hook` reads: tool results can be large,
@@ -38,7 +38,15 @@ func forwardHook(paths daemon.Paths, stdin io.Reader, receivedAt time.Time) erro
 	if err != nil {
 		return fmt.Errorf("read hook input: %w", err)
 	}
-	events, err := claudecode.Events(claudecode.Hook{Input: input, ReceivedAt: receivedAt, PID: claudePID()})
+	// The start time is read here, while the Agent is certainly alive (it
+	// runs this hook), not later in the Host Daemon, when its pid may
+	// already name another process.
+	pid := claudePID()
+	var started uint64
+	if pid != 0 {
+		started = liveness.Started(pid)
+	}
+	events, err := claudecode.Events(claudecode.Hook{Input: input, ReceivedAt: receivedAt, PID: pid, PIDStarted: started})
 	if err != nil || len(events) == 0 {
 		return err
 	}
@@ -63,26 +71,11 @@ func forwardHook(paths daemon.Paths, stdin io.Reader, receivedAt time.Time) erro
 
 // claudePID is the Claude Code process that runs the hook: CLAUDE_PID, set
 // by Claude Code though undocumented, or else the hook's grandparent (hook →
-// sh → claude). 0 when neither is known.
+// sh → claude), where /proc shows it. 0 when neither is known: the session
+// is then never reaped, only returned to Idle when stale.
 func claudePID() int {
 	if pid, err := strconv.Atoi(os.Getenv("CLAUDE_PID")); err == nil && pid > 0 {
 		return pid
 	}
-	return parentOf(os.Getppid())
-}
-
-// parentOf reads a process's parent from /proc; 0 where there is no /proc
-// (macOS, Windows) or the process is gone.
-func parentOf(pid int) int {
-	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-	if err != nil {
-		return 0
-	}
-	// pid (comm) state ppid …; comm may contain spaces and parentheses.
-	fields := strings.Fields(string(stat[strings.LastIndexByte(string(stat), ')')+1:]))
-	if len(fields) < 2 {
-		return 0
-	}
-	ppid, _ := strconv.Atoi(fields[1])
-	return ppid
+	return liveness.Parent(os.Getppid())
 }

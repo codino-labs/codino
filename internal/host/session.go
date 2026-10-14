@@ -62,6 +62,10 @@ type Event struct {
 	Acknowledge bool `json:"acknowledge,omitempty"`
 	// PID is the Agent's process, the session's liveness handle; kept when 0.
 	PID int `json:"pid,omitempty"`
+	// PIDStarted is when PID's process started, as the LivenessProbe's
+	// platform measures it, so a reused pid isn't taken for the Agent; 0 when
+	// unknown. It goes with PID.
+	PIDStarted uint64 `json:"pid_started,omitempty"`
 	// Transcript is the Agent's transcript file; kept when empty.
 	Transcript string `json:"transcript,omitempty"`
 }
@@ -94,8 +98,15 @@ type session struct {
 	stateEntered time.Time
 	projectColor string
 	tile         int
-	pid          int
+	liveness     livenessHandle
 	transcript   string
+}
+
+// livenessHandle names the Agent's process: its pid and, when known, when it
+// started. The zero value means the session can't be probed.
+type livenessHandle struct {
+	pid     int
+	started uint64
 }
 
 // tracker is the Session Tracker: every Agent Session, keyed by session id.
@@ -153,7 +164,7 @@ func (t *tracker) apply(e Event, now time.Time) (s *session, removed bool) {
 		s.project = e.Project
 	}
 	if e.PID != 0 {
-		s.pid = e.PID
+		s.liveness = livenessHandle{pid: e.PID, started: e.PIDStarted}
 	}
 	if e.Transcript != "" {
 		s.transcript = e.Transcript
@@ -165,11 +176,11 @@ func (t *tracker) apply(e Event, now time.Time) (s *session, removed bool) {
 }
 
 // interrupt returns a Working or Awaiting Input session to Idle when the
-// human interrupted it at at, after its last event. It returns the session
-// when it changed.
+// human interrupted it at at (zero: not interrupted), after its last event.
+// It returns the session when it changed.
 func (t *tracker) interrupt(id string, at, now time.Time) *session {
 	s := t.sessions[id]
-	if s == nil || !s.interruptible() || at.Before(s.lastEventAt.Add(-hookStartLag)) {
+	if s == nil || at.IsZero() || !s.interruptible() || at.Before(s.lastEventAt.Add(-hookStartLag)) {
 		return nil
 	}
 	at = notAfter(at, now)
@@ -178,6 +189,39 @@ func (t *tracker) interrupt(id string, at, now time.Time) *session {
 	}
 	s.state = Idle
 	s.stateEntered = at
+	return s
+}
+
+// staleToIdle returns a Working session to Idle when neither a hook nor its
+// transcript, last written at modified (zero when unknown), has shown any
+// activity for StaleAfter. It returns the session when it changed.
+func (t *tracker) staleToIdle(id string, modified, now time.Time) *session {
+	s := t.sessions[id]
+	if s == nil || s.state != Working || s.transcript == "" {
+		return nil
+	}
+	active := s.lastEventAt
+	if modified.After(active) {
+		active = modified
+	}
+	if now.Sub(active) < StaleAfter {
+		return nil
+	}
+	s.state = Idle
+	s.stateEntered = now
+	return s
+}
+
+// reap removes a session whose Agent exited at now, unless an event has
+// meanwhile named another Agent for it (e.g. the session was resumed). It
+// returns the session when it was removed.
+func (t *tracker) reap(id string, gone livenessHandle, now time.Time) *session {
+	s := t.sessions[id]
+	if s == nil || s.liveness != gone {
+		return nil
+	}
+	delete(t.sessions, id)
+	t.ended[id] = now
 	return s
 }
 
@@ -206,6 +250,18 @@ func (t *tracker) transcriptsToProbe() map[string]string {
 	for id, s := range t.sessions {
 		if s.transcript != "" && s.interruptible() {
 			probe[id] = s.transcript
+		}
+	}
+	return probe
+}
+
+// livenessToProbe returns the liveness handle of every session that has one,
+// by session id. A session without one is never reaped.
+func (t *tracker) livenessToProbe() map[string]livenessHandle {
+	probe := map[string]livenessHandle{}
+	for id, s := range t.sessions {
+		if s.liveness.pid != 0 {
+			probe[id] = s.liveness
 		}
 	}
 	return probe

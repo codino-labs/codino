@@ -67,6 +67,19 @@ func TestEventsCarryThePIDAndTranscriptOfTheSession(t *testing.T) {
 	}
 }
 
+func TestEventsCarryWhenTheAgentStarted(t *testing.T) {
+	// The liveness handle is the pid plus its start time, so a reused pid
+	// isn't taken for the Agent.
+	got, err := claudecode.Events(claudecode.Hook{Input: []byte(`{"session_id":"s","hook_event_name":"Stop"}`),
+		ReceivedAt: receivedAt, PID: 139150, PIDStarted: 4821733})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].PID != 139150 || got[0].PIDStarted != 4821733 {
+		t.Fatalf("got %+v, want pid 139150 started at 4821733", got)
+	}
+}
+
 func TestHookEventsThatChangeNoSessionStateGiveNoEvents(t *testing.T) {
 	for _, name := range []string{"SubagentStop", "Notification", "MessageDisplay", "InstructionsLoaded", "PostModelSwitch", "SomeFutureHook"} {
 		if got := events(t, `{"session_id":"s","hook_event_name":"`+name+`"}`, 1); len(got) != 0 {

@@ -23,6 +23,9 @@ type Hook struct {
 	// PID is the Claude Code process that owns the session (CLAUDE_PID), or 0
 	// when unknown.
 	PID int
+	// PIDStarted is when PID's process started (liveness.Started), 0 when
+	// unknown.
+	PIDStarted uint64
 }
 
 // input holds the hook JSON fields the Adapter reads.
@@ -79,7 +82,7 @@ func Events(h Hook) ([]host.Event, error) {
 	if in.SessionID == "" {
 		return nil, errors.New("hook input: no session_id")
 	}
-	e := host.Event{SessionID: in.SessionID, Project: in.Cwd, At: h.ReceivedAt, PID: h.PID, Transcript: in.TranscriptPath}
+	e := host.Event{SessionID: in.SessionID, Project: in.Cwd, At: h.ReceivedAt, PID: h.PID, PIDStarted: h.PIDStarted, Transcript: in.TranscriptPath}
 	switch in.HookEventName {
 	case "SessionStart":
 		if in.Source == "compact" {

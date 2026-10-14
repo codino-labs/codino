@@ -18,7 +18,10 @@ type SessionSummary struct {
 	ProjectColor string       `json:"project_color"`
 	Tile         int          `json:"tile"`
 	// PID is the Agent's process, 0 when unknown.
-	PID        int    `json:"pid,omitempty"`
+	PID int `json:"pid,omitempty"`
+	// PIDStarted is when PID's process started (platform units), 0 when
+	// unknown.
+	PIDStarted uint64 `json:"pid_started,omitempty"`
 	Transcript string `json:"transcript,omitempty"`
 }
 
@@ -42,7 +45,7 @@ func (h *Host) Status() Status {
 		st.Sessions = append(st.Sessions, SessionSummary{
 			ID: s.id, State: s.state, StateEntered: s.stateEntered,
 			Project: s.project, ProjectColor: s.projectColor, Tile: s.tile,
-			PID: s.pid, Transcript: s.transcript,
+			PID: s.liveness.pid, PIDStarted: s.liveness.started, Transcript: s.transcript,
 		})
 	}
 	if h.device != nil {

@@ -7,12 +7,15 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/codino-labs/codino/internal/host"
 )
 
 // Transcripts reads Claude Code transcripts for what no hook reports: Esc,
 // Ctrl-C, a denied permission and a rejected plan fire no hook, but Claude
-// Code writes a "[Request interrupted by user…]" user entry right away.
-// It implements host.TranscriptProbe.
+// Code writes a "[Request interrupted by user…]" user entry right away; and
+// when the transcript was last written, so the Host can tell a session that
+// went quiet. It implements host.TranscriptProbe.
 type Transcripts struct{}
 
 // interruptMarker starts the text of the user entry Claude Code writes when
@@ -26,20 +29,29 @@ const (
 	tailLimit = 4 << 20
 )
 
-// Interrupted reports whether the latest message entry (user or
-// assistant; bookkeeping entries are skipped) is the interrupt marker, and
-// when it was written.
-func (Transcripts) Interrupted(path string) (time.Time, bool) {
+// Read reports when the transcript was last written and, when its latest
+// message entry (user or assistant; bookkeeping entries are skipped) is the
+// interrupt marker, when the human interrupted the turn.
+func (Transcripts) Read(path string) host.Transcript {
 	f, err := os.Open(path)
 	if err != nil {
-		return time.Time{}, false
+		return host.Transcript{}
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return time.Time{}, false
+		return host.Transcript{}
 	}
-	size := info.Size()
+	tr := host.Transcript{Modified: info.ModTime()}
+	if at, ok := interrupted(f, info.Size()); ok {
+		tr.Interrupted = at
+	}
+	return tr
+}
+
+// interrupted reports whether the latest message entry of the transcript f,
+// size bytes long, is the interrupt marker, and when it was written.
+func interrupted(f *os.File, size int64) (time.Time, bool) {
 	for n := int64(tailStart); ; n *= 2 {
 		n = min(n, size)
 		buf := make([]byte, n)

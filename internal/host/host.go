@@ -44,6 +44,7 @@ type Host struct {
 	closed          bool
 
 	doneDecay time.Duration
+	roots     ProjectRootProbe
 
 	exitGrace time.Duration
 	// emptySince is when the last session ended (or the Host started without
@@ -138,6 +139,7 @@ func New(clock Clock, devices devicelink.Discoverer, opts ...Option) *Host {
 		sessions:   newTracker(),
 		exitGrace:  DefaultExitGrace,
 		doneDecay:  DefaultDoneDecay,
+		roots:      sameDir{},
 		emptySince: clock.Now(),
 		retired:    make(chan struct{}),
 	}
@@ -170,13 +172,17 @@ func (h *Host) Apply(e Event) error {
 	if err := e.Validate(); err != nil {
 		return err
 	}
+	var root string
+	if e.Project != "" {
+		root = h.roots.Root(e.Project) // file I/O: outside h.mu
+	}
 	h.mu.Lock()
 	defer h.unlock()
 	if h.hasRetired() {
 		return ErrRetired
 	}
 	now := h.clock.Now()
-	c := h.sessions.apply(e, now)
+	c := h.sessions.apply(e, root, now)
 	h.updateExitGrace(now)
 	switch {
 	case c.removed:
@@ -186,6 +192,9 @@ func (h *Host) Apply(e Event) error {
 	}
 	if c.acknowledged {
 		h.send(acknowledge(c.s))
+	}
+	for _, s := range c.moved {
+		h.send(upsert(s))
 	}
 	return nil
 }
@@ -278,9 +287,12 @@ func (h *Host) probe(p probeTargets) {
 	defer h.unlock()
 	now := h.clock.Now()
 	for id, handle := range gone {
-		if s := h.sessions.reap(id, handle, now); s != nil {
+		if s, moved := h.sessions.reap(id, handle, now); s != nil {
 			slog.Info("session reaped: its Agent is gone", "session", s.id, "pid", handle.pid)
 			h.send(protocol.NewSessionRemove(s.id))
+			for _, m := range moved {
+				h.send(upsert(m))
+			}
 		}
 	}
 	h.updateExitGrace(now)

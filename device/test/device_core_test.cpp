@@ -84,6 +84,13 @@ struct Device8x8 {
   device::DeviceCore core{profile8x8(), "0.1.0", clock};
 };
 
+// The same in the Aggregate Layout: the whole matrix shows the Aggregate
+// State however many sessions there are.
+struct AggregateDevice8x8 {
+  FakeClock clock;
+  device::DeviceCore core{profile8x8(), "0.1.0", clock, device::Escalation{}, device::Layout::Aggregate};
+};
+
 }  // namespace
 
 TEST_CASE_FIXTURE(Device8x8, "with no Agent Sessions the whole matrix is dark") {
@@ -118,7 +125,7 @@ TEST_CASE("every Session State fills the matrix with its own color") {
   }
 }
 
-TEST_CASE("the Aggregate State is the most urgent Session State") {
+TEST_CASE("in the Aggregate Layout the matrix shows the most urgent Session State") {
   for (size_t urgent = 0; urgent < 5; ++urgent) {
     for (size_t calmer = urgent + 1; calmer < 5; ++calmer) {
       const std::string more = kStatesByUrgency[urgent];
@@ -128,7 +135,7 @@ TEST_CASE("the Aggregate State is the most urgent Session State") {
       // Both arrival orders, and ids that sort either way.
       for (const auto& [first, second] : {std::pair{"a", "b"}, std::pair{"b", "a"}}) {
         FakeClock clock;
-        device::DeviceCore core(profile8x8(), "0.1.0", clock);
+        device::DeviceCore core(profile8x8(), "0.1.0", clock, device::Escalation{}, device::Layout::Aggregate);
         core.receive(upsert(first, less));
         core.receive(upsert(second, more));
 
@@ -420,7 +427,7 @@ TEST_CASE_FIXTURE(Device8x8, "Disconnected holds however long the silence, even 
 
 // --- Acknowledge ------------------------------------------------------------
 
-TEST_CASE_FIXTURE(Device8x8, "an Acknowledge on the Device tells the Host and clears every Done session") {
+TEST_CASE_FIXTURE(AggregateDevice8x8, "an Acknowledge on the Device tells the Host and clears every Done session") {
   core.receive(upsert("s1", "done"));
   core.receive(upsert("s2", "done"));
   core.receive(upsert("s3", "working"));
@@ -594,7 +601,7 @@ TEST_CASE_FIXTURE(Device8x8, "after 10 min ignored Awaiting Input settles into a
   CHECK(sameHue(w.colors[0], awaitingInputHue()));
 }
 
-TEST_CASE_FIXTURE(Device8x8, "the matrix shows the most insistent Escalation step of the sessions Awaiting Input") {
+TEST_CASE_FIXTURE(AggregateDevice8x8, "the Aggregate Layout shows the most insistent Escalation step of the sessions Awaiting Input") {
   core.receive(upsert("old", "awaiting_input", "#2ad14f"));
   advanceWithHeartbeats(core, clock, 11 * kMinute);  // steady glow
   core.receive(upsert("older", "awaiting_input", "#ff3da5", hostTime(clock)));
@@ -632,7 +639,7 @@ device::PixelBuffer awaitingInputFor(uint32_t ms) {
 
 }  // namespace
 
-TEST_CASE_FIXTURE(Device8x8, "an Acknowledge on the Device restarts Escalation but never hides Awaiting Input") {
+TEST_CASE_FIXTURE(AggregateDevice8x8, "an Acknowledge on the Device restarts Escalation but never hides Awaiting Input") {
   core.receive(upsert("a", "awaiting_input", "#2ad14f"));
   core.receive(upsert("b", "awaiting_input", "#ff3da5"));
   core.receive(upsert("c", "done"));
@@ -679,7 +686,7 @@ TEST_CASE_FIXTURE(Device8x8, "an Acknowledge from the Host restarts Escalation o
   CHECK(w.colors[0] == kPink);
 }
 
-TEST_CASE_FIXTURE(Device8x8, "an Acknowledge from the Host without a session id is for every session") {
+TEST_CASE_FIXTURE(AggregateDevice8x8, "an Acknowledge from the Host without a session id is for every session") {
   core.receive(upsert("a", "awaiting_input", "#2ad14f"));
   core.receive(upsert("b", "done"));
   advanceWithHeartbeats(core, clock, 3 * kMinute);
@@ -762,4 +769,306 @@ TEST_CASE("acknowledge messages the Device cannot use are ignored as a whole") {
 
     CHECK(core.render() == loneSessionFrame("done"));
   }
+}
+
+// --- Layout -----------------------------------------------------------------
+
+namespace {
+
+std::string upsertTile(const std::string& id, const std::string& state, const std::string& projectColor, int tile,
+                       int64_t stateEntered = kStateEntered) {
+  return R"({"type":"session_upsert","id":")" + id + R"(","state":")" + state + R"(","project_color":")" +
+         projectColor + R"(","state_entered":)" + std::to_string(stateEntered) + R"(,"tile":)" +
+         std::to_string(tile) + "}";
+}
+
+// A rectangle of the matrix: columns [x0, x1), rows [y0, y1).
+struct Region {
+  int x0, y0, x1, y1;
+};
+
+// True when every pixel of `region` is `color`.
+bool isFilled(const device::PixelBuffer& frame, Region region, device::Rgb color) {
+  for (int y = region.y0; y < region.y1; ++y)
+    for (int x = region.x0; x < region.x1; ++x)
+      if (frame.at(static_cast<uint8_t>(x), static_cast<uint8_t>(y)) != color) return false;
+  return true;
+}
+
+bool isDark(const device::PixelBuffer& frame, Region region) { return isFilled(frame, region, device::Rgb{}); }
+
+// True when no pixel of `region` is off and every one is `hue` at some
+// brightness: the region shows that color, whatever its animation.
+bool isLitIn(const device::PixelBuffer& frame, Region region, device::Rgb hue);
+
+constexpr device::Rgb kBlue{0x3a, 0x86, 0xff};
+constexpr device::Rgb kYellow{0xe6, 0xe6, 0x00};
+constexpr device::Rgb kCyan{0x00, 0xd0, 0xd0};
+
+// The 8x8 halves, quadrants and columns.
+constexpr Region kLeft{0, 0, 4, 8}, kRight{4, 0, 8, 8};
+constexpr Region kTopLeft{0, 0, 4, 4}, kTopRight{4, 0, 8, 4}, kBottomLeft{0, 4, 4, 8}, kBottomRight{4, 4, 8, 8};
+Region column(int i) { return {i, 0, i + 1, 8}; }
+
+bool isLitIn(const device::PixelBuffer& frame, Region region, device::Rgb hue) {
+  for (int y = region.y0; y < region.y1; ++y)
+    for (int x = region.x0; x < region.x1; ++x) {
+      const device::Rgb c = frame.at(static_cast<uint8_t>(x), static_cast<uint8_t>(y));
+      if (c == device::Rgb{} || !sameHue(c, hue)) return false;
+    }
+  return true;
+}
+
+}  // namespace
+
+TEST_CASE_FIXTURE(Device8x8, "with two sessions the matrix splits into halves, each in its session's Project Color") {
+  core.receive(upsertTile("b", "done", "#2ad14f", 1));
+  core.receive(upsertTile("a", "done", "#ff3da5", 0));
+
+  const auto& frame = core.render();
+
+  CHECK(isFilled(frame, kLeft, kPink));
+  CHECK(isFilled(frame, kRight, kGreen));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "with three or four sessions the matrix splits into quadrants, each session in its Tile") {
+  core.receive(upsertTile("a", "done", "#2ad14f", 0));
+  core.receive(upsertTile("c", "done", "#ff3da5", 2));
+  core.receive(upsertTile("d", "done", "#3a86ff", 3));
+
+  CHECK(isFilled(core.render(), kTopLeft, kGreen));
+  CHECK(isDark(core.render(), kTopRight));  // slot 1 is free
+  CHECK(isFilled(core.render(), kBottomLeft, kPink));
+  CHECK(isFilled(core.render(), kBottomRight, kBlue));
+
+  core.receive(upsertTile("e", "done", "#e6e600", 1));
+
+  CHECK(isFilled(core.render(), kTopRight, kYellow));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "with five to eight sessions each one gets a column") {
+  const char* const colors[] = {"#2ad14f", "#ff3da5", "#3a86ff", "#e6e600", "#00d0d0"};
+  const device::Rgb rgb[] = {kGreen, kPink, kBlue, kYellow, kCyan};
+  for (int i = 0; i < 5; ++i) core.receive(upsertTile("s" + std::to_string(i), "done", colors[i], i));
+
+  const auto& frame = core.render();
+
+  for (int i = 0; i < 5; ++i) {
+    CAPTURE(i);
+    CHECK(isFilled(frame, column(i), rgb[i]));
+  }
+  for (int i = 5; i < 8; ++i) CHECK(isDark(frame, column(i)));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "with nine or more sessions the last column is the Overflow Tile with the Aggregate State of the rest") {
+  for (int i = 0; i < 7; ++i) core.receive(upsertTile("s" + std::to_string(i), "done", "#3a86ff", i));
+  core.receive(upsertTile("s7", "working", "#2ad14f", 7));
+  core.receive(upsertTile("s8", "error", "#ff3da5", 8));
+
+  const auto& frame = core.render();
+
+  for (int i = 0; i < 7; ++i) CHECK(isFilled(frame, column(i), kBlue));
+  // Error wins the rest's Aggregate State; the Overflow Tile shows it in the
+  // Session State's own color, as it stands for several projects.
+  CHECK(isLitIn(frame, column(7), loneSessionFrame("error").at(0, 0)));
+  CHECK_FALSE(sameHue(frame.at(7, 0), kGreen));
+  CHECK_FALSE(sameHue(frame.at(7, 0), kPink));
+}
+
+TEST_CASE("the Overflow Tile animates like a Tile of its Aggregate State") {
+  FakeClock clock;
+  device::DeviceCore core(profile8x8(), "0.1.0", clock);
+  for (int i = 0; i < 7; ++i) core.receive(upsertTile("s" + std::to_string(i), "done", "#3a86ff", i));
+  core.receive(upsertTile("s7", "working", "#2ad14f", 7));
+  core.receive(upsertTile("s8", "error", "#ff3da5", 8));
+  // The same Session States, each in its own Tile, the Error one in the
+  // color of Error.
+  FakeClock otherClock;
+  device::DeviceCore other(profile8x8(), "0.1.0", otherClock);
+  for (int i = 0; i < 7; ++i) other.receive(upsertTile("s" + std::to_string(i), "done", "#3a86ff", i));
+  other.receive(upsertTile("s7", "error", "#ff0000", 7));
+
+  for (int t = 0; t < 3000; t += 100) {
+    CAPTURE(t);
+    const device::PixelBuffer overflow = core.render();
+    const device::PixelBuffer tile = other.render();
+    for (uint8_t y = 0; y < 8; ++y) CHECK(overflow.at(7, y) == tile.at(7, y));
+    clock.advance(100);
+    otherClock.advance(100);
+  }
+}
+
+TEST_CASE_FIXTURE(Device8x8, "a session keeps its Tile while others come and go") {
+  core.receive(upsertTile("a", "done", "#2ad14f", 0));
+  core.receive(upsertTile("b", "done", "#ff3da5", 1));
+  core.receive(upsertTile("c", "done", "#3a86ff", 2));
+  core.receive(upsertTile("d", "done", "#e6e600", 3));
+
+  core.receive(R"({"type":"session_remove","id":"a"})");
+
+  CHECK(isDark(core.render(), kTopLeft));
+  CHECK(isFilled(core.render(), kTopRight, kPink));
+  CHECK(isFilled(core.render(), kBottomLeft, kBlue));
+  CHECK(isFilled(core.render(), kBottomRight, kYellow));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "sessions whose Tiles don't fit the Layout take the free ones in order") {
+  // Between a session_remove and the upserts of the sessions the Host moved.
+  core.receive(upsertTile("x", "done", "#2ad14f", 3));
+  core.receive(upsertTile("y", "done", "#ff3da5", 5));
+
+  CHECK(isFilled(core.render(), kLeft, kGreen));
+  CHECK(isFilled(core.render(), kRight, kPink));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "a session upsert without a Tile slot takes the first free Tile") {
+  core.receive(upsertTile("a", "done", "#2ad14f", 1));
+  core.receive(R"({"type":"session_upsert","id":"b","state":"done","project_color":"#ff3da5"})");
+
+  CHECK(isFilled(core.render(), kLeft, kPink));
+  CHECK(isFilled(core.render(), kRight, kGreen));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "a lone session has the whole matrix and shows the Aggregate State") {
+  core.receive(upsertTile("a", "working", "#2ad14f", 3));
+
+  CHECK(core.render() == loneSessionFrame("working"));
+}
+
+TEST_CASE("the Layout scales to the Hardware Profile's matrix size") {
+  device::HardwareProfile panel16;
+  panel16.width = 16;
+  panel16.height = 16;
+  FakeClock clock;
+  device::DeviceCore core(panel16, "0.1.0", clock);
+  for (int i = 0; i < 4; ++i)
+    core.receive(upsertTile("s" + std::to_string(i), "done", i == 1 ? "#ff3da5" : "#3a86ff", i));
+
+  const auto& frame = core.render();
+
+  CHECK(isFilled(frame, {8, 0, 16, 8}, kPink));  // top-right quadrant
+  CHECK(isFilled(frame, {0, 0, 8, 8}, kBlue));
+  CHECK(isFilled(frame, {0, 8, 16, 16}, kBlue));
+
+  for (int i = 4; i < 6; ++i) core.receive(upsertTile("s" + std::to_string(i), "done", "#3a86ff", i));
+  CHECK(isFilled(core.render(), {2, 0, 4, 16}, kPink));  // the second column, two pixels wide
+  CHECK(isDark(core.render(), {12, 0, 16, 16}));
+}
+
+namespace {
+
+// What a Tile in the top-left quadrant looks like over three seconds, one
+// frame every 50 ms, with three other Done sessions.
+std::vector<device::PixelBuffer> tileFrames(const std::string& state) {
+  FakeClock clock;
+  device::DeviceCore core(profile8x8(), "0.1.0", clock);
+  core.receive(upsertTile("a", state, "#2ad14f", 0));
+  for (int i = 1; i < 4; ++i) core.receive(upsertTile("s" + std::to_string(i), "done", "#ff3da5", i));
+  std::vector<device::PixelBuffer> frames;
+  for (int t = 0; t < 3000; t += 50, clock.advance(50)) {
+    if (t % 1000 == 0) core.receive(heartbeat(clock));
+    device::PixelBuffer frame(4, 4);
+    const device::PixelBuffer& whole = core.render();
+    for (uint8_t y = 0; y < 4; ++y)
+      for (uint8_t x = 0; x < 4; ++x) frame.set(x, y, whole.at(x, y));
+    frames.push_back(frame);
+  }
+  return frames;
+}
+
+bool allFrames(const std::vector<device::PixelBuffer>& frames, bool (*test)(const device::PixelBuffer&)) {
+  return std::all_of(frames.begin(), frames.end(), test);
+}
+
+bool anyFrame(const std::vector<device::PixelBuffer>& frames, bool (*test)(const device::PixelBuffer&)) {
+  return std::any_of(frames.begin(), frames.end(), test);
+}
+
+bool isGreenEverywhere(const device::PixelBuffer& f) { return isLitIn(f, {0, 0, 4, 4}, kGreen); }
+bool isSolid(const device::PixelBuffer& f) { return isSolidLit(f); }
+bool isOff(const device::PixelBuffer& f) { return isDark(f); }
+
+}  // namespace
+
+TEST_CASE("a Tile animates its Session State in its Project Color") {
+  const auto idle = tileFrames("idle");
+  const auto working = tileFrames("working");
+  const auto done = tileFrames("done");
+  const auto error = tileFrames("error");
+  const auto awaiting = tileFrames("awaiting_input");
+
+  // Idle: calm, a dim steady glow.
+  CHECK(allFrames(idle, isGreenEverywhere));
+  CHECK(std::all_of(idle.begin(), idle.end(), [&](const auto& f) { return f == idle[0]; }));
+  CHECK(isDim(idle[0]));
+  // Done: steady, fully lit.
+  CHECK(std::all_of(done.begin(), done.end(), [](const auto& f) { return isFilled(f, {0, 0, 4, 4}, kGreen); }));
+  // Working: something moves through the Tile.
+  CHECK(allFrames(working, isGreenEverywhere));
+  CHECK_FALSE(anyFrame(working, isSolid));
+  // Error: blinks.
+  CHECK(anyFrame(error, isOff));
+  CHECK(std::any_of(error.begin(), error.end(), [](const auto& f) { return isFilled(f, {0, 0, 4, 4}, kGreen); }));
+  // Awaiting Input: the whole Tile pulses.
+  CHECK(allFrames(awaiting, isGreenEverywhere));
+  CHECK(allFrames(awaiting, isSolid));
+  const auto brightest = std::max_element(awaiting.begin(), awaiting.end(), [](const auto& l, const auto& r) {
+    return brightness(l) < brightness(r);
+  });
+  const auto dimmest = std::min_element(awaiting.begin(), awaiting.end(), [](const auto& l, const auto& r) {
+    return brightness(l) < brightness(r);
+  });
+  CHECK(brightness(*brightest) - brightness(*dimmest) >= 40);
+}
+
+TEST_CASE_FIXTURE(Device8x8, "a Tile of a session Awaiting Input escalates: it pulses faster after 30 s") {
+  core.receive(upsertTile("a", "awaiting_input", "#2ad14f", 0));
+  core.receive(upsertTile("b", "working", "#ff3da5", 1));
+  auto peaksIn = [&](uint32_t ms) {
+    int peaks = 0, previous = -1;
+    bool rising = false;
+    for (uint32_t t = 0; t < ms; t += 20, clock.advance(20)) {
+      if (t % kSecond == 0) core.receive(heartbeat(clock));
+      const int level = std::max({core.render().at(0, 0).r, core.render().at(0, 0).g, core.render().at(0, 0).b});
+      if (previous >= 0 && level < previous && rising) ++peaks;
+      if (previous >= 0 && level != previous) rising = level > previous;
+      previous = level;
+    }
+    return peaks;
+  };
+  const int gentle = peaksIn(10 * kSecond);
+  advanceWithHeartbeats(core, clock, 25 * kSecond);
+
+  CHECK(peaksIn(10 * kSecond) > gentle);
+  CHECK(sameHue(core.render().at(0, 0), kGreen));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "a Takeover takes the whole matrix in the per-session Layout") {
+  core.receive(upsertTile("a", "awaiting_input", "#2ad14f", 0));
+  core.receive(upsertTile("b", "working", "#ff3da5", 1));
+  core.receive(upsertTile("c", "done", "#3a86ff", 2));
+
+  advanceWithHeartbeats(core, clock, 2 * kMinute);
+
+  CHECK(isFilled(core.render(), {0, 0, 8, 8}, kGreen));
+}
+
+TEST_CASE("a session in the Overflow Tile can take the whole matrix over too") {
+  FakeClock clock;
+  device::DeviceCore core(profile8x8(), "0.1.0", clock);
+  for (int i = 0; i < 8; ++i) core.receive(upsertTile("s" + std::to_string(i), "working", "#3a86ff", i));
+  core.receive(upsertTile("s8", "awaiting_input", "#2ad14f", 8));
+
+  advanceWithHeartbeats(core, clock, 2 * kMinute);
+
+  CHECK(isFilled(core.render(), {0, 0, 8, 8}, kGreen));
+}
+
+TEST_CASE("the Aggregate Layout shows the Aggregate State on the whole matrix") {
+  FakeClock clock;
+  device::DeviceCore core(profile8x8(), "0.1.0", clock, device::Escalation{}, device::Layout::Aggregate);
+  core.receive(upsertTile("a", "done", "#2ad14f", 0));
+  core.receive(upsertTile("b", "error", "#ff3da5", 1));
+
+  CHECK(core.render() == loneSessionFrame("error"));
 }

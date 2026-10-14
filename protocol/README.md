@@ -61,9 +61,11 @@ Creates the Agent Session if the id is new, otherwise replaces its fields.
 | `state` | string | Session State: `idle`, `working`, `awaiting_input`, `done` or `error`. |
 | `project_color` | string | Project Color as `#rrggbb`. |
 | `state_entered` | integer | Host time the session entered `state`. Escalation counts from it, so a Device claimed again shows how long a session has really been waiting. |
-| `tile` | integer | Tile slot assigned by the Host, starting at 0. |
+| `tile` | integer | Tile slot assigned by the Host, starting at 0: where the session goes in the adaptive Layout (below). |
 
-A v0 Device needs `id` (a non-empty string) and a valid `state`.
+A v0 Device needs `id` (a non-empty string) and a valid `state`. Without a valid `project_color` it uses the Session State's own color; without a valid `tile` the session takes the first free Tile.
+
+The Host's Project Color Allocator picks `project_color`: a pinned color, else a stable hash of the git repo root of the session's project (the directory itself outside a repo; every worktree of a repo shares its root) onto a palette of 8 well-separated hues. When an active session of another project already holds that hue, the newcomer takes the next free one, and keeps it for its lifetime. Sessions of the same project share a color.
 
 ### `session_remove`
 
@@ -100,7 +102,7 @@ A Device needs nothing but the `type`: without `id` the Acknowledge is for every
 
 ## Escalation and Done decay
 
-Escalation is the Device's (ADR-0001): it renders it from `state_entered`, the latest `acknowledge` and its own clock, relating Host times to its clock through the `host_time` of `hello` and `heartbeat`. A Host time after the Device's estimate of now counts as now. Defaults, until Preferences carry them: a gentle pulse for 30 s, faster and brighter until 2 min, a Takeover of the whole matrix in the waiting session's `project_color` until 10 min (cycling between the Project Colors of every session in Takeover, one a second), then a steady glow. The matrix shows the most insistent step any Awaiting Input session has reached: Takeover, faster, gentle, steady glow (a session that has just started to wait outranks one that settled).
+Escalation is the Device's (ADR-0001): it renders it from `state_entered`, the latest `acknowledge` and its own clock, relating Host times to its clock through the `host_time` of `hello` and `heartbeat`. A Host time after the Device's estimate of now counts as now. Defaults, until Preferences carry them: a gentle pulse for 30 s, faster and brighter until 2 min, a Takeover of the whole matrix in the waiting session's `project_color` until 10 min (cycling between the Project Colors of every session in Takeover, one a second), then a steady glow. Where the whole matrix shows the Aggregate State (below), it shows the most insistent step any Awaiting Input session has reached; a Tile shows its own session's step: Takeover, faster, gentle, steady glow (a session that has just started to wait outranks one that settled).
 
 Done decay is the Host's: the Session Tracker returns a session that stayed Done for the Done decay time (10 min by default) to Idle, as an Acknowledge of that session only, and sends its `session_upsert` (`state_entered` is when the decay was due). The Host is canonical for Session States, so `codino status` and the Device never disagree about a decayed session.
 
@@ -113,9 +115,24 @@ Every message the Device can use (`hello`, `heartbeat`, a valid `session_upsert`
 - The next usable message ends it. A heartbeat brings back the sessions the Device holds; a `hello` replaces them.
 - A Host Daemon that exits stops the heartbeats too, so the Device shows Disconnected until the next Host Daemon says `hello`.
 
+## Layout and Tiles
+
+How the matrix is used is the Device's Layout, a Device-side setting until the Preferences push carries it (#11):
+
+- **Adaptive** (the default): one Tile per Agent Session. One session has the whole matrix, two get halves (left, right), three or four get quadrants (top-left, top-right, bottom-left, bottom-right), five to eight get one column each (an eighth of the width, from the left). With nine or more, seven sessions get columns and the eighth column is the Overflow Tile, which shows the Aggregate State of the rest.
+- **Aggregate**: the whole matrix shows the Aggregate State, however many sessions there are.
+
+Tile slots are the Host's. Tile slot `i` is the `i`th region in the order above; slots from 7 up, with nine or more sessions, are the Overflow Tile. The room the adaptive Layout has is 1, 2, 4 or 8 Tiles for 1, 2, 3–4 and 5–8 sessions, and 7 plus the Overflow Tile beyond. The Host keeps a session's slot for its whole life while it fits that room. When a session starts or ends, the sessions without a slot that fits (a newcomer, a session whose slot the shrunken Layout lost, a session in the Overflow Tile) take the first free slots in order of session start time; any left over keep, or take, a slot from 7 up. The Host sends a `session_upsert` for every session whose slot changed, after the `session_upsert` or `session_remove` that changed the number of sessions.
+
+The Device places each session at its slot when the slot fits the room and no other session holds it. Between those messages (a session removed, the moved sessions not upserted yet) slots can disagree with the room: the sessions that don't fit take the free Tiles in slot order, and those left over go to the Overflow Tile.
+
 ## Rendering in v0
 
-The Device shows the Aggregate State as one solid color across the whole matrix. The most urgent Session State wins: Awaiting Input > Error > Done > Working > Idle. Awaiting Input escalates as above; the other states are steady. With no sessions the matrix is dark. Themes, Layouts with Tiles and enforcing the Hardware Profile's `brightness_cap` come later: Escalation's brightness steps are fractions of full brightness, which the cap will scale.
+With one session, or in the Aggregate Layout, the Device shows the Aggregate State as one solid color across the whole matrix. The most urgent Session State wins: Awaiting Input > Error > Done > Working > Idle. Awaiting Input escalates as above; the other states are steady. With no sessions the matrix is dark.
+
+With several sessions in the adaptive Layout each Tile is lit in its session's Project Color and animated by its Session State: Idle is a dim steady glow, Working a bright row running down a dimmer Tile, Done steadily lit, Error blinking, Awaiting Input pulsing with its own Escalation step (a gentle pulse, then a faster and brighter one, then a steady glow). Free Tiles are dark. The Overflow Tile is animated the same way by the Aggregate State of its sessions, in that Session State's own color, since it stands for several projects. A Takeover takes the whole matrix in either Layout.
+
+Themes and enforcing the Hardware Profile's `brightness_cap` come later: Escalation's brightness steps are fractions of full brightness, which the cap will scale.
 
 ## Fixtures
 

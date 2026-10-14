@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 
 #include <algorithm>
+#include <climits>
 
 namespace device {
 
@@ -86,11 +87,12 @@ constexpr int kSteadyGlow = 170;
 }  // namespace
 
 DeviceCore::DeviceCore(HardwareProfile profile, std::string firmwareVersion, const Clock& clock,
-                       Escalation escalation)
+                       Escalation escalation, Layout layout)
     : profile_(std::move(profile)),
       firmwareVersion_(std::move(firmwareVersion)),
       clock_(clock),
       escalation_(escalation),
+      layout_(layout),
       frame_(profile_.width, profile_.height),
       lastHostMessage_(clock.millis()) {}
 
@@ -123,6 +125,9 @@ std::string DeviceCore::receive(std::string_view line) {
       session.settled = false;
     }
     session.state = state->state;
+    // Without a slot the session goes to the first free Tile.
+    const int tile = message["tile"] | -1;
+    session.tile = tile < 0 ? INT_MAX : tile;
     // Without a valid Project Color, a Takeover shows the Session State's.
     if (!parseColor(message["project_color"] | "", session.projectColor)) session.projectColor = state->color;
   } else if (type == "session_remove") {
@@ -232,56 +237,177 @@ void DeviceCore::renderDisconnected() {
   }
 }
 
-// Awaiting Input escalates per session; the matrix shows the most insistent
-// step any Awaiting Input session has reached: Takeover, then the faster pulse, then
-// the gentle pulse, then the steady glow.
-void DeviceCore::renderAwaitingInput() {
-  const uint32_t now = clock_.millis();
-  std::vector<Rgb> takeover;  // the Project Colors in Takeover, in session id order
-  bool faster = false;
-  bool gentle = false;
-  // How far into its step the session whose pulse is shown is, so each
-  // pulse starts at its dimmest when its step starts.
-  uint32_t pulseElapsed = 0;
-  for (auto& [id, session] : sessions_) {
-    if (session.state != SessionState::AwaitingInput) continue;
-    const uint32_t unacknowledged = now - session.escalationStart;
-    if (session.settled || unacknowledged >= escalation_.steadyFromMs) {
-      session.settled = true;  // steady glow
-      continue;
-    }
-    if (unacknowledged >= escalation_.takeoverFromMs) {
-      takeover.push_back(session.projectColor);
-    } else if (unacknowledged >= escalation_.fasterFromMs) {
-      if (!faster) pulseElapsed = unacknowledged - escalation_.fasterFromMs;
-      faster = true;
-    } else if (!faster && !gentle) {
-      pulseElapsed = unacknowledged;
-      gentle = true;
-    }
+// Where Escalation is for a session Awaiting Input. Latches the steady glow.
+DeviceCore::EscalationStep DeviceCore::escalationStep(Session& session) {
+  if (session.state != SessionState::AwaitingInput) return {};
+  const uint32_t unacknowledged = clock_.millis() - session.escalationStart;
+  if (session.settled || unacknowledged >= escalation_.steadyFromMs) {
+    session.settled = true;
+    return {EscalationStep::Steady, 0};
   }
-  const Rgb color = infoFor(SessionState::AwaitingInput).color;
-  if (!takeover.empty()) {
-    const uint32_t cycle = std::max<uint32_t>(escalation_.takeoverCycleMs, 1);
-    frame_.fill(takeover[(now / cycle) % takeover.size()]);
-  } else if (faster) {
-    frame_.fill(scaled(color, kFasterPulse.level(pulseElapsed)));
-  } else if (gentle) {
-    frame_.fill(scaled(color, kGentlePulse.level(pulseElapsed)));
-  } else {
-    frame_.fill(scaled(color, kSteadyGlow));
+  if (unacknowledged >= escalation_.takeoverFromMs) return {EscalationStep::Takeover, 0};
+  if (unacknowledged >= escalation_.fasterFromMs)
+    return {EscalationStep::Faster, unacknowledged - escalation_.fasterFromMs};
+  return {EscalationStep::Gentle, unacknowledged};
+}
+
+namespace {
+
+// The brightness (of 255) Awaiting Input shows at an Escalation step: each
+// pulse starts at its dimmest when its step starts.
+template <typename Step>
+int awaitingInputLevel(Step step) {
+  switch (step.kind) {
+    case Step::Faster:
+      return kFasterPulse.level(step.elapsed);
+    case Step::Gentle:
+      return kGentlePulse.level(step.elapsed);
+    default:
+      return kSteadyGlow;
   }
 }
 
+// Tile animations, in the session's Project Color.
+constexpr int kTileIdle = 32;            // a dim, steady glow
+constexpr int kTileWorkingBase = 80;     // Working: a bright row runs down a dimmer Tile
+constexpr uint32_t kTileWorkingRowMs = 125;
+constexpr uint32_t kTileErrorBlinkMs = 500;  // Error: on, then off, this long each
+
+// How many Tiles the adaptive Layout has room for with n sessions; with nine
+// or more the eighth column is the Overflow Tile, so seven.
+constexpr int kOverflowTile = 7;
+int tileRoom(size_t n) {
+  if (n <= 1) return 1;
+  if (n == 2) return 2;
+  if (n <= 4) return 4;
+  if (n <= 8) return 8;
+  return kOverflowTile;
+}
+
+}  // namespace
+
+// The whole matrix shows the Aggregate State. Awaiting Input shows the most
+// insistent step any Awaiting Input session has reached: the faster pulse,
+// then the gentle pulse, then the steady glow.
+void DeviceCore::renderAggregate(EscalationStep mostInsistent) {
+  const SessionState aggregate = aggregateState();
+  const Rgb color = infoFor(aggregate).color;
+  if (aggregate == SessionState::AwaitingInput) {
+    frame_.fill(scaled(color, awaitingInputLevel(mostInsistent)));
+  } else {
+    frame_.fill(color);
+  }
+}
+
+// One Tile per session where its Tile slot says, when the slot fits the
+// Layout and no other session holds it; the others take the free Tiles in slot
+// order, and those left over go to the Overflow Tile.
+void DeviceCore::renderTiles() {
+  const int room = tileRoom(sessions_.size());
+  std::vector<std::pair<const std::string*, Session*>> byTile;
+  for (auto& [id, session] : sessions_) byTile.push_back({&id, &session});
+  std::stable_sort(byTile.begin(), byTile.end(),
+                   [](const auto& a, const auto& b) { return a.second->tile < b.second->tile; });
+  std::vector<Session*> tiles(room, nullptr);
+  std::vector<Session*> unplaced;
+  for (auto& [id, session] : byTile) {
+    if (session->tile < room && tiles[session->tile] == nullptr) {
+      tiles[session->tile] = session;
+    } else {
+      unplaced.push_back(session);
+    }
+  }
+  std::vector<Session*> overflow;
+  for (Session* session : unplaced) {
+    auto free = std::find(tiles.begin(), tiles.end(), nullptr);
+    if (free != tiles.end()) {
+      *free = session;
+    } else {
+      overflow.push_back(session);
+    }
+  }
+
+  // Halves side by side, quadrants, then columns.
+  const int columns = room == 1 ? 1 : room <= 4 ? 2 : 8;
+  const int rows = room == 4 ? 2 : 1;
+  const int w = profile_.width, h = profile_.height;
+  auto region = [&](int i) {
+    const int col = i % columns, row = i / columns;
+    return Region{col * w / columns, row * h / rows, (col + 1) * w / columns, (row + 1) * h / rows};
+  };
+  frame_.fill(Rgb{});
+  for (int i = 0; i < room; ++i) {
+    if (tiles[i] != nullptr)
+      renderTile(region(i), tiles[i]->state, tiles[i]->projectColor, escalationStep(*tiles[i]));
+  }
+  if (overflow.empty()) return;
+  // The Overflow Tile stands for several projects: it shows the Aggregate
+  // State of its sessions in the Session State's own color.
+  SessionState aggregate = SessionState::Idle;
+  EscalationStep mostInsistent;
+  for (Session* session : overflow) {
+    if (infoFor(session->state).urgency > infoFor(aggregate).urgency) aggregate = session->state;
+    const EscalationStep step = escalationStep(*session);
+    if (step.kind > mostInsistent.kind) mostInsistent = step;
+  }
+  renderTile(region(kOverflowTile), aggregate, infoFor(aggregate).color, mostInsistent);
+}
+
+// A Tile in `color`, animated by `state`.
+void DeviceCore::renderTile(Region region, SessionState state, Rgb color, EscalationStep step) {
+  const uint32_t now = clock_.millis();
+  const int height = std::max(region.y1 - region.y0, 1);
+  const int workingRow = region.y0 + static_cast<int>((now / kTileWorkingRowMs) % height);
+  for (int y = region.y0; y < region.y1; ++y) {
+    Rgb pixel;
+    switch (state) {
+      case SessionState::Idle:
+        pixel = scaled(color, kTileIdle);
+        break;
+      case SessionState::Working:
+        pixel = y == workingRow ? color : scaled(color, kTileWorkingBase);
+        break;
+      case SessionState::Done:
+        pixel = color;
+        break;
+      case SessionState::Error:
+        pixel = (now / kTileErrorBlinkMs) % 2 == 0 ? color : Rgb{};
+        break;
+      case SessionState::AwaitingInput:
+        pixel = scaled(color, awaitingInputLevel(step));
+        break;
+    }
+    for (int x = region.x0; x < region.x1; ++x) frame_.set(static_cast<uint8_t>(x), static_cast<uint8_t>(y), pixel);
+  }
+}
+
+// A Takeover of any session takes the whole matrix whatever the Layout,
+// cycling between the Project Colors of every session in Takeover. Otherwise
+// one session, or the Aggregate Layout, shows the Aggregate State on the
+// whole matrix, and several sessions get Tiles.
 const PixelBuffer& DeviceCore::render() {
   if (disconnected()) {
     renderDisconnected();
-  } else if (sessions_.empty()) {
+    return frame_;
+  }
+  if (sessions_.empty()) {
     frame_.fill(Rgb{});
-  } else if (aggregateState() == SessionState::AwaitingInput) {
-    renderAwaitingInput();
+    return frame_;
+  }
+  std::vector<Rgb> takeover;  // the Project Colors in Takeover, in session id order
+  EscalationStep mostInsistent;
+  for (auto& [id, session] : sessions_) {
+    const EscalationStep step = escalationStep(session);
+    if (step.kind == EscalationStep::Takeover) takeover.push_back(session.projectColor);
+    if (step.kind > mostInsistent.kind) mostInsistent = step;
+  }
+  if (!takeover.empty()) {
+    const uint32_t cycle = std::max<uint32_t>(escalation_.takeoverCycleMs, 1);
+    frame_.fill(takeover[(clock_.millis() / cycle) % takeover.size()]);
+  } else if (layout_ == Layout::Aggregate || sessions_.size() == 1) {
+    renderAggregate(mostInsistent);
   } else {
-    frame_.fill(infoFor(aggregateState()).color);
+    renderTiles();
   }
   return frame_;
 }

@@ -8,7 +8,7 @@
 // the Device's Acknowledge (the button of a real Device): the Virtual Device
 // sends it to the Host on stdout.
 //
-// Usage: virtual-device [--size WxH]
+// Usage: virtual-device [--size WxH] [--layout adaptive|aggregate]
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -153,21 +153,36 @@ bool parseSize(const char* text, device::HardwareProfile& profile) {
   return true;
 }
 
+// The Layout until Preferences carry it (#11).
+bool parseLayout(const char* text, device::Layout& layout) {
+  if (std::strcmp(text, "adaptive") == 0) {
+    layout = device::Layout::Adaptive;
+  } else if (std::strcmp(text, "aggregate") == 0) {
+    layout = device::Layout::Aggregate;
+  } else {
+    return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   device::HardwareProfile profile = referenceProfile();
+  device::Layout layout = device::Layout::Adaptive;
   for (int i = 1; i < argc; ++i) {
     if (std::strcmp(argv[i], "--size") == 0 && i + 1 < argc && parseSize(argv[i + 1], profile)) {
       ++i;
+    } else if (std::strcmp(argv[i], "--layout") == 0 && i + 1 < argc && parseLayout(argv[i + 1], layout)) {
+      ++i;
     } else {
-      std::fprintf(stderr, "usage: %s [--size WxH]   (W, H in 1..64)\n", argv[0]);
+      std::fprintf(stderr, "usage: %s [--size WxH] [--layout adaptive|aggregate]   (W, H in 1..64)\n", argv[0]);
       return 2;
     }
   }
 
   SteadyClock clock;
-  device::DeviceCore core(profile, kFirmwareVersion, clock);
+  device::DeviceCore core(profile, kFirmwareVersion, clock, device::Escalation{}, layout);
 
   device::PixelBuffer shown = core.render();
   draw(shown, "(start)");

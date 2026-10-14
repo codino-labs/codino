@@ -276,8 +276,8 @@ func TestOnlyStateChangesReachTheDeviceAndRestartTheStateClock(t *testing.T) {
 	apply(t, h, host.Event{SessionID: "a", State: host.Done})
 
 	assertMessages(t, since(dev, 1), []string{
-		`{"type":"session_upsert","id":"a","state":"working","project_color":"#3a86ff","state_entered":1760432400000,"tile":0}`,
-		`{"type":"session_upsert","id":"a","state":"done","project_color":"#3a86ff","state_entered":1760432400600,"tile":0}`,
+		`{"type":"session_upsert","id":"a","state":"working","project_color":"#ff3030","state_entered":1760432400000,"tile":0}`,
+		`{"type":"session_upsert","id":"a","state":"done","project_color":"#ff3030","state_entered":1760432400600,"tile":0}`,
 	})
 }
 
@@ -288,22 +288,25 @@ func TestSessionsKeepTheirTileAndNewcomersTakeTheFirstFreeOne(t *testing.T) {
 	defer h.Close()
 	h.Tick()
 
+	// Four sessions are quadrants; three still are, so nobody moves.
 	apply(t, h,
 		host.Event{SessionID: "a", State: host.Working},
 		host.Event{SessionID: "b", State: host.Working},
 		host.Event{SessionID: "c", State: host.Working},
+		host.Event{SessionID: "d", State: host.Working},
 		host.Event{SessionID: "a", End: true},
 		host.Event{SessionID: "c", State: host.Done},
-		host.Event{SessionID: "d", State: host.Idle},
+		host.Event{SessionID: "e", State: host.Idle},
 	)
 
 	assertMessages(t, since(dev, 1), []string{
 		`{"type":"session_upsert","id":"a","state":"working","project_color":"#3a86ff","state_entered":1760432400000,"tile":0}`,
 		`{"type":"session_upsert","id":"b","state":"working","project_color":"#3a86ff","state_entered":1760432400000,"tile":1}`,
 		`{"type":"session_upsert","id":"c","state":"working","project_color":"#3a86ff","state_entered":1760432400000,"tile":2}`,
+		`{"type":"session_upsert","id":"d","state":"working","project_color":"#3a86ff","state_entered":1760432400000,"tile":3}`,
 		`{"type":"session_remove","id":"a"}`,
 		`{"type":"session_upsert","id":"c","state":"done","project_color":"#3a86ff","state_entered":1760432400000,"tile":2}`,
-		`{"type":"session_upsert","id":"d","state":"idle","project_color":"#3a86ff","state_entered":1760432400000,"tile":0}`,
+		`{"type":"session_upsert","id":"e","state":"idle","project_color":"#3a86ff","state_entered":1760432400000,"tile":0}`,
 	})
 }
 
@@ -416,7 +419,7 @@ func TestStatusListsSessionsByTile(t *testing.T) {
 	st := h.Status()
 
 	want := []host.SessionSummary{
-		{ID: "a", State: host.AwaitingInput, StateEntered: time.UnixMilli(1760432401000), Project: "/src/app", ProjectColor: "#3a86ff", Tile: 0},
+		{ID: "a", State: host.AwaitingInput, StateEntered: time.UnixMilli(1760432401000), Project: "/src/app", ProjectColor: "#ff3030", Tile: 0},
 		{ID: "b", State: host.Done, StateEntered: time.UnixMilli(1760432401000), ProjectColor: "#3a86ff", Tile: 1},
 	}
 	if !reflect.DeepEqual(st.Sessions, want) {

@@ -79,6 +79,19 @@ struct Escalation {
   uint32_t takeoverCycleMs = 1000;
 };
 
+// How the matrix area is used. Adaptive by default; a Preference (#11).
+enum class Layout {
+  // One Tile per Agent Session, in its Project Color and animated by its
+  // Session State: one session has the whole matrix (showing the Aggregate
+  // State), two get halves, three or four quadrants, five to eight columns;
+  // with nine or more the eighth column is the Overflow Tile, showing the
+  // Aggregate State of the sessions that don't fit. Tile slots come from the
+  // Host.
+  Adaptive,
+  // The Aggregate State on the whole matrix, however many sessions.
+  Aggregate,
+};
+
 class DeviceCore {
  public:
   static constexpr int kProtocolVersion = 0;
@@ -87,7 +100,7 @@ class DeviceCore {
   static constexpr uint32_t kDefaultDisconnectedTimeoutMs = 5000;
 
   DeviceCore(HardwareProfile profile, std::string firmwareVersion, const Clock& clock,
-             Escalation escalation = {});
+             Escalation escalation = {}, Layout layout = Layout::Adaptive);
 
   // Feeds one protocol line (without the trailing newline). Returns the reply
   // line to send back, or an empty string when there is none.
@@ -114,10 +127,13 @@ class DeviceCore {
 
   const Clock& clock_;
   Escalation escalation_;
+  Layout layout_;
   PixelBuffer frame_;
   struct Session {
     SessionState state = SessionState::Idle;
     Rgb projectColor;
+    // Tile slot from the Host: where the session goes in the adaptive Layout.
+    int tile = 0;
     // Clock time Escalation counts from: when the session entered Awaiting
     // Input or was last Acknowledged.
     uint32_t escalationStart = 0;
@@ -126,7 +142,20 @@ class DeviceCore {
     // it over.
     bool settled = false;
   };
-  void renderAwaitingInput();
+  // How far Escalation has gone for a session Awaiting Input: its step and
+  // how long the session has been in that step. None for other states.
+  struct EscalationStep {
+    enum Kind { None, Steady, Gentle, Faster, Takeover } kind = None;  // least insistent first
+    uint32_t elapsed = 0;
+  };
+  EscalationStep escalationStep(Session& session);
+  // A region of the matrix: columns [x0, x1), rows [y0, y1).
+  struct Region {
+    int x0, y0, x1, y1;
+  };
+  void renderAggregate(EscalationStep mostInsistent);
+  void renderTiles();
+  void renderTile(Region region, SessionState state, Rgb color, EscalationStep step);
   // Acknowledges the session at clock time `at`.
   void acknowledge(Session& session, uint32_t at);
   void heardHostTime(int64_t hostTime);

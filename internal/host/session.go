@@ -86,16 +86,17 @@ func (e Event) Validate() error {
 	return nil
 }
 
-// DefaultProjectColor is every session's Project Color until the Project
-// Color Allocator lands.
-const DefaultProjectColor = "#3a86ff"
-
 // session is one Agent Session as the Session Tracker holds it.
 type session struct {
 	id string
+	// started is when the session started, which orders reflows.
+	started time.Time
 	// lastEventAt is the At of the newest event applied.
-	lastEventAt  time.Time
-	project      string
+	lastEventAt time.Time
+	project     string
+	// root is the repo root of project, which the Project Color is
+	// allocated by.
+	root         string
 	state        SessionState
 	stateEntered time.Time
 	projectColor string
@@ -121,6 +122,8 @@ type tracker struct {
 	// ended is when each recently removed session ended, so an event that
 	// was older but arrives later doesn't bring the session back.
 	ended map[string]time.Time
+	// pins are the pinned Project Colors, by repo root.
+	pins map[string]string
 }
 
 func newTracker() *tracker {
@@ -141,10 +144,14 @@ type change struct {
 	// acknowledged: s is Awaiting Input and was Acknowledged at
 	// s.acknowledged, which the Device needs to restart Escalation.
 	acknowledged bool
+	// moved are the other sessions whose Tile slot changed: the Layout
+	// reflowed because s started or ended.
+	moved []*session
 }
 
-// apply records the event at now and returns what changed.
-func (t *tracker) apply(e Event, now time.Time) change {
+// apply records the event at now and returns what changed. root is the repo
+// root of e.Project.
+func (t *tracker) apply(e Event, root string, now time.Time) change {
 	at := notAfter(e.At, now)
 	for id, ended := range t.ended {
 		if now.Sub(ended) > endedMemory {
@@ -159,18 +166,27 @@ func (t *tracker) apply(e Event, now time.Time) change {
 		return change{}
 	}
 	if e.End {
-		t.forget(e.SessionID, at)
 		if !known {
+			t.ended[e.SessionID] = at
 			return change{}
 		}
-		return change{s: s, removed: true}
+		return change{s: s, removed: true, moved: t.forget(e.SessionID, at)}
 	}
 	if !known && e.State == "" {
 		return change{} // an Acknowledge of a session the Host doesn't know
 	}
 	if !known {
-		s = &session{id: e.SessionID, projectColor: DefaultProjectColor, tile: t.freeTile()}
+		s = &session{id: e.SessionID, root: root, started: at, tile: noTile}
+		s.projectColor = t.projectColor(s, root)
 		t.sessions[e.SessionID] = s
+	}
+	var moved []*session
+	if !known {
+		for _, m := range t.assignTiles() {
+			if m != s {
+				moved = append(moved, m)
+			}
+		}
 	}
 	s.lastEventAt = at
 	changed := !known
@@ -182,6 +198,14 @@ func (t *tracker) apply(e Event, now time.Time) change {
 		changed = true
 	}
 	if e.Project != "" {
+		if known && s.project == "" {
+			// The session learns its project: it is colored by it from now on.
+			s.root = root
+			if color := t.projectColor(s, root); color != s.projectColor {
+				s.projectColor = color
+				changed = true
+			}
+		}
 		s.project = e.Project
 	}
 	if e.PID != 0 {
@@ -194,7 +218,7 @@ func (t *tracker) apply(e Event, now time.Time) change {
 	if !changed && !acknowledged {
 		return change{}
 	}
-	return change{s: s, upserted: changed, acknowledged: acknowledged}
+	return change{s: s, upserted: changed, acknowledged: acknowledged, moved: moved}
 }
 
 // acknowledge is the human seeing the session at at: Done is cleared to
@@ -278,21 +302,23 @@ func (l livenessHandle) update(pid int, started uint64) livenessHandle {
 
 // reap removes a session whose Agent exited at now, unless an event has
 // meanwhile named another Agent for it (e.g. the session was resumed). It
-// returns the session when it was removed.
-func (t *tracker) reap(id string, gone livenessHandle, now time.Time) *session {
+// returns the session when it was removed, and the sessions whose Tile slot
+// changed.
+func (t *tracker) reap(id string, gone livenessHandle, now time.Time) (*session, []*session) {
 	s := t.sessions[id]
 	if s == nil || s.liveness != gone {
-		return nil
+		return nil, nil
 	}
-	t.forget(id, now)
-	return s
+	return s, t.forget(id, now)
 }
 
 // forget removes a session that ended at at, and remembers it ended so an
-// older event arriving later doesn't bring it back.
-func (t *tracker) forget(id string, at time.Time) {
+// older event arriving later doesn't bring it back. It returns the sessions
+// whose Tile slot changed.
+func (t *tracker) forget(id string, at time.Time) []*session {
 	delete(t.sessions, id)
 	t.ended[id] = at
+	return t.assignTiles()
 }
 
 // hookStartLag bounds how long after Claude Code fires a hook its process
@@ -337,18 +363,99 @@ func (t *tracker) livenessToProbe() map[string]livenessHandle {
 	return probe
 }
 
-// freeTile is the lowest Tile slot no session holds. A session keeps its slot
-// for its whole life.
-func (t *tracker) freeTile() int {
-	used := map[int]bool{}
+// noTile is the Tile slot of a session that has none yet.
+const noTile = -1
+
+// overflowFrom is the first Tile slot of the Overflow Tile: with more
+// sessions than the eight columns hold, the eighth column stands for the rest.
+const overflowFrom = 7
+
+// tileRoom is how many Tiles the adaptive Layout has room for with n
+// sessions: the whole matrix, halves, quadrants, eight columns, then seven
+// columns and the Overflow Tile.
+func tileRoom(n int) int {
+	switch {
+	case n <= 1:
+		return 1
+	case n == 2:
+		return 2
+	case n <= 4:
+		return 4
+	case n <= 8:
+		return 8
+	default:
+		return overflowFrom
+	}
+}
+
+// assignTiles gives every session a Tile slot for the adaptive Layout of
+// this many sessions, and returns the sessions whose slot changed. A session
+// keeps a slot that fits the Layout for its whole life. The others (the
+// Layout shrank, a newcomer, a session in the Overflow Tile) take the first
+// free slots in order of session start time; those beyond the room keep or
+// take a slot from overflowFrom up, the Overflow Tile.
+func (t *tracker) assignTiles() []*session {
+	room := tileRoom(len(t.sessions))
+	byStart := make([]*session, 0, len(t.sessions))
 	for _, s := range t.sessions {
+		byStart = append(byStart, s)
+	}
+	sort.Slice(byStart, func(i, j int) bool {
+		a, b := byStart[i], byStart[j]
+		if !a.started.Equal(b.started) {
+			return a.started.Before(b.started)
+		}
+		return a.id < b.id
+	})
+	before := map[*session]int{}
+	used := map[int]bool{}
+	var homeless []*session
+	for _, s := range byStart {
+		before[s] = s.tile
+		if s.tile != noTile && s.tile < room && !used[s.tile] {
+			used[s.tile] = true
+		} else {
+			homeless = append(homeless, s)
+		}
+	}
+	var overflow []*session
+	for _, s := range homeless {
+		if slot := firstFree(used, 0); slot < room {
+			used[slot] = true
+			s.tile = slot
+		} else {
+			overflow = append(overflow, s)
+		}
+	}
+	// The Overflow Tile: a session keeps its slot there, a newcomer takes
+	// the first free one.
+	var newcomers []*session
+	for _, s := range overflow {
+		if s.tile >= overflowFrom && !used[s.tile] {
+			used[s.tile] = true
+		} else {
+			newcomers = append(newcomers, s)
+		}
+	}
+	for _, s := range newcomers {
+		s.tile = firstFree(used, overflowFrom)
 		used[s.tile] = true
 	}
-	tile := 0
-	for used[tile] {
-		tile++
+	var moved []*session
+	for _, s := range byStart {
+		if s.tile != before[s] {
+			moved = append(moved, s)
+		}
 	}
-	return tile
+	return moved
+}
+
+// firstFree is the lowest slot from from up that isn't used.
+func firstFree(used map[int]bool, from int) int {
+	for used[from] {
+		from++
+	}
+	return from
 }
 
 // ordered returns the sessions by Tile slot.

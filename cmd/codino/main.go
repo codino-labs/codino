@@ -27,6 +27,7 @@ import (
 	"github.com/codino-labs/codino/internal/claudecode"
 	"github.com/codino-labs/codino/internal/daemon"
 	"github.com/codino-labs/codino/internal/devicelink"
+	"github.com/codino-labs/codino/internal/gitrepo"
 	"github.com/codino-labs/codino/internal/host"
 	"github.com/codino-labs/codino/internal/liveness"
 )
@@ -220,7 +221,8 @@ func runDaemon(paths daemon.Paths, args []string) error {
 		devices = devicelink.VirtualDevice{Path: path, Display: os.Stderr}
 	}
 	h := host.New(systemClock{}, devices, host.WithExitGrace(exitGrace),
-		host.WithTranscriptProbe(claudecode.Transcripts{}), host.WithLivenessProbe(liveness.Probe{}))
+		host.WithTranscriptProbe(claudecode.Transcripts{}), host.WithLivenessProbe(liveness.Probe{}),
+		host.WithProjectRoots(gitrepo.Roots{}))
 	defer h.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -33,6 +33,7 @@ Run a single test with `go test -race ./internal/host -run 'TestReplug'`.
 cmd/codino/          the one binary: CLI (`event`, `status`), the Host Daemon (`daemon`) and `hook` (internal, run by the plugin)
 internal/claudecode/ Claude Code Adapter: hook JSON → host.Events; transcript probe (interrupts, last write)
 internal/host/       Host core: Session Tracker, Aggregate State, Done decay, Acknowledge, Device Link driving, heartbeat, exit grace, stuck-session cleanup; clock and probes injected
+internal/gitrepo/    repo root of a project directory (worktrees share the main repo's), read from git's files without running git
 internal/liveness/   liveness probe: is the Agent's pid still its process (signal 0; /proc start time on Linux)
 internal/devicelink/ handshake and claim; Discoverer seam (VirtualDevice now, USB serial later)
 internal/daemon/     local Unix socket: server, client (`Client.Deliver` spawns the daemon on demand)
@@ -44,6 +45,8 @@ Every Agent's signals become `host.Event`s delivered with `daemon.Client.Deliver
 Stuck sessions (#8): once a second the Host probes, outside its lock, the liveness of every session with a pid (`LivenessProbe`) and the transcript of every Working/Awaiting Input session (`TranscriptProbe`). A session whose Agent is gone is removed, as if it had ended (kill -9 fires no SessionEnd); an interrupted turn goes back to Idle; a Working session with no hook and no transcript write for `host.StaleAfter` (15 min) falls back to Idle. The hook reads the Agent's start time (`liveness.Started`) while the Agent is certainly alive, so a reused pid reads as gone. A session without a pid is never reaped, only judged stale. Host core tests fake both probes (`fakeLiveness`, `fakeTranscripts`, `quietTranscript`). The product name stays in `cmd/codino` (runtime directory name, `CODINO_VIRTUAL_DEVICE`, `CODINO_EXIT_GRACE`).
 
 Done decay and Acknowledge (#9): the Session Tracker returns a session Done for `host.DefaultDoneDecay` (10 min, `host.WithDoneDecay`) to Idle on a Tick. An event with `Acknowledge` (a prompt the human typed, `codino event --acknowledge`) clears that session's Done and restarts its Escalation; an `acknowledge` from the Device (`devicelink.Device.Acknowledged`) does it for every session. Escalation itself is the Device's (ADR-0001): the Host only tells it when a waiting session was Acknowledged, and replays that after the upserts when it claims a Device. `internal/host/acknowledge_test.go` drives the Device side through the fake Device's `toHost`.
+
+Layout and Project Colors (#10): the Host's Project Color Allocator (`project_color.go`) gives a session a pinned color (`host.WithPinnedProjectColors`, until Preferences carry pins in #11), else the color of an active session of the same repo root, else the hue of `host.ProjectColors` its repo root hashes to (FNV-1a), bumped to the next hue no active session holds. A session keeps it for its lifetime. Repo roots come from the injected `host.ProjectRootProbe` (`gitrepo.Roots` in the daemon; tests use `fakeRoots`), resolved outside the Host's lock. Tile slots (`assignTiles`) follow the adaptive Layout's room (1, 2, 4, 8, then 7 plus the Overflow Tile from slot 7): a session keeps a slot that fits; newcomers and sessions that no longer fit take the first free slots by session start time, and the Host upserts every session that moved. `project_color_test.go` and `tile_test.go` assert on the upserts the fake Device receives.
 
 ### Demo: `codino event` drives the Virtual Device
 
@@ -117,6 +120,8 @@ make -C device test
 
 Run a single test with `device/build/device_core_test -tc="*Aggregate State*"`.
 
+The Layout (#10) is a `device::Layout` constructor parameter, adaptive by default, until the Preferences push carries it (#11); the terminal Virtual Device takes `--layout aggregate`. One session, or the Aggregate Layout, shows the Aggregate State on the whole matrix; several get Tiles where their `tile` says (halves, quadrants, columns, then the Overflow Tile), each in its Project Color and animated by its Session State; a Takeover takes the whole matrix in either Layout. Layout tests assert on regions (`isFilled(frame, kTopLeft, kGreen)`, `isLitIn`, `column(i)`); multi-session tests about the Aggregate State use the `AggregateDevice8x8` fixture.
+
 Escalation (#9) lives in the Device core: per session, from `state_entered` (related to the Device clock through `host_time`) or the latest Acknowledge. Its thresholds are a `device::Escalation` constructor parameter, with defaults until they become Preferences. Escalation tests send `heartbeat(clock)`, whose Host time tracks the fake clock, and compare with frames of a fresh Device (`awaitingInputFor(ms)`) or watch a stretch of frames (`watch`: pulses, brightness, colors).
 
 The terminal Virtual Device renders every 100 ms even without input, so Disconnected shows 5 s after the Host goes silent:
@@ -134,7 +139,13 @@ make -C device && cat protocol/fixtures/{hello,session-upsert,heartbeat,session-
 To see every Session State win the Aggregate State in turn (Idle → Working → Done → Error → Awaiting Input):
 
 ```sh
-for s in idle working done error awaiting_input; do echo "{\"type\":\"session_upsert\",\"id\":\"$s\",\"state\":\"$s\"}"; done | device/build/virtual-device
+for s in idle working done error awaiting_input; do echo "{\"type\":\"session_upsert\",\"id\":\"$s\",\"state\":\"$s\"}"; done | device/build/virtual-device --layout aggregate
+```
+
+The same sessions in the adaptive Layout, one column each:
+
+```sh
+i=0; for s in idle working done error awaiting_input; do echo "{\"type\":\"session_upsert\",\"id\":\"$s\",\"state\":\"$s\",\"project_color\":\"#3a86ff\",\"tile\":$i}"; i=$((i+1)); done | device/build/virtual-device
 ```
 
 ## Agent skills

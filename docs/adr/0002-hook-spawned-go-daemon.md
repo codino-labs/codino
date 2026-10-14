@@ -1,0 +1,3 @@
+# Go Host Daemon spawned by hooks, not installed as an OS service
+
+Claude Code hooks (all `async`) call one Go binary bundled in the Claude Code plugin. The binary forwards each event over a local socket to the Host Daemon, spawning the daemon if it isn't running, and the daemon exits once no sessions remain. We rejected an OS service (systemd/launchd/Windows service) and Python/Node runtimes. The goal is that installing the plugin is the entire setup: no runtime to install, no service to manage. A running daemon is required because hooks are short-lived, run once per session, and race for the serial port; only a single owner can compute the Aggregate State.

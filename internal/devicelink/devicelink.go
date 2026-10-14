@@ -27,8 +27,13 @@ type Candidate struct {
 	Name string
 	Open func() (io.ReadWriteCloser, error)
 	// Refused, when set, is told that the candidate opened but answered
-	// hello with no valid hello_reply in this Host's protocol version.
-	Refused func()
+	// hello with no valid hello_reply in this Host's protocol version, and
+	// why: a *VersionMismatchError for a Device of another version.
+	Refused func(err error)
+	// Incompatible, when set, is why the candidate was refused a while
+	// ago, still to be reported: Claim neither opens it nor sends it hello,
+	// and fails with this error.
+	Incompatible error
 }
 
 // Discoverer lists the candidates to try, in order of preference.
@@ -44,15 +49,35 @@ func (f DiscovererFunc) Candidates() []Candidate { return f() }
 // NoDevices offers no candidates: a Host with nothing to drive.
 var NoDevices = DiscovererFunc(func() []Candidate { return nil })
 
-// VersionMismatchError reports a Device speaking another protocol version. The
-// Host refuses to drive it; the user has to update the firmware.
+// FlasherURL is where the human updates a Device's firmware: the web
+// flasher (device/flasher). It has no public address yet, so this points at
+// the README's flashing section; set it to the published flasher's URL once
+// there is one (docs/hardware/reference-board.md, "Web flasher").
+const FlasherURL = "https://github.com/codino-labs/codino#2-flash"
+
+// VersionMismatchError reports a Device speaking another protocol version
+// than the Host. The Host refuses to drive it, and the Device shows "update
+// me": the human has to update the firmware (a Device older than the Host)
+// or Codino on the Host (a newer one).
 type VersionMismatchError struct {
 	Candidate string
-	Device    int
+	// Device is the Device's protocol version, Firmware its firmware's.
+	Device   int
+	Firmware string
+	// Host is the Host's protocol version.
+	Host int
 }
 
+// FirmwareOutdated is true when the Device is the one to update.
+func (e *VersionMismatchError) FirmwareOutdated() bool { return e.Device < e.Host }
+
 func (e *VersionMismatchError) Error() string {
-	return fmt.Sprintf("%s speaks protocol %d, the Host speaks %d: update the firmware", e.Candidate, e.Device, protocol.Version)
+	if e.FirmwareOutdated() {
+		return fmt.Sprintf("%s runs firmware %s, which speaks protocol %d; this Host speaks protocol %d: update the firmware with the web flasher, %s",
+			e.Candidate, e.Firmware, e.Device, e.Host, FlasherURL)
+	}
+	return fmt.Sprintf("%s runs firmware %s, which speaks protocol %d, newer than this Host's protocol %d: update Codino on this Host (the Claude Code plugin)",
+		e.Candidate, e.Firmware, e.Device, e.Host)
 }
 
 // Device is a claimed Device: the handshake succeeded and protocol versions match.
@@ -78,7 +103,13 @@ func Claim(candidates []Candidate, now time.Time) (*Device, error) {
 	}
 	var failure error
 	for _, c := range candidates {
-		dev, err := open(c, now)
+		var dev *Device
+		var err error
+		if c.Incompatible != nil {
+			err = c.Incompatible
+		} else {
+			dev, err = open(c, now)
+		}
 		if err == nil {
 			return dev, nil
 		}
@@ -99,7 +130,7 @@ func open(c Candidate, now time.Time) (*Device, error) {
 	}
 	dev, err := handshake(c, port, now)
 	if err != nil && c.Refused != nil {
-		c.Refused()
+		c.Refused(err)
 	}
 	return dev, err
 }
@@ -150,7 +181,7 @@ func handshake(c Candidate, port io.ReadWriteCloser, now time.Time) (*Device, er
 	reply := r.reply
 	if reply.Protocol != protocol.Version {
 		port.Close()
-		return nil, &VersionMismatchError{Candidate: c.Name, Device: reply.Protocol}
+		return nil, &VersionMismatchError{Candidate: c.Name, Device: reply.Protocol, Firmware: reply.Firmware, Host: protocol.Version}
 	}
 
 	dev := &Device{Name: c.Name, HelloReply: reply, port: port, gone: make(chan struct{}), acknowledged: make(chan struct{}, 1),

@@ -14,9 +14,22 @@ Use a USB cable that carries data, not a charge-only one.
 
 ### 2. Flash
 
-You flash the firmware from a web page in Chrome or Edge, with no toolchain to install. Choose your board's Hardware Profile there; the reference board's is preselected.
+You flash the firmware from a web page in desktop Chrome or Edge, with no toolchain to install:
 
-> **Coming soon.** The web flasher isn't published yet. This section will link to it when it is. Until then you can build and flash the firmware yourself: see [docs/hardware/reference-board.md](docs/hardware/reference-board.md).
+1. **Choose your build.** The reference board's Hardware Profile is preselected. The other presets are the ESP32-S3-Matrix with an external 8×8 or 16×16 panel on GPIO 1; "Custom…" takes any size, data pin, wiring, color order and caps.
+2. **Put the board in download mode:** hold BOOT, press and release RESET, release BOOT. Codino's firmware never jumps into download mode by itself (so nothing on your computer can strand it there), which is why you need this step every time, updates included.
+3. **Install,** and choose the port called "USB JTAG/serial debug unit" (not "Codino"). Erase on a first install; don't when updating, to keep your settings and Themes. Press RESET when it's done if the matrix stays dark.
+
+If your firmware gets too old for the plugin, `codino status` says so with a link back here, and the matrix shows an amber arrow pointing up.
+
+> **Coming soon.** The web flasher isn't published yet. Until it is, build it and run it on your own machine (needs `make`, Python 3 and `curl`; the first build downloads PlatformIO and the ESP32 toolchain, about 1 GB, into `~/.cache/codino-toolchain`):
+>
+> ```sh
+> make -C device flasher
+> python3 -m http.server -d device/build/flasher 8000   # then open http://localhost:8000
+> ```
+>
+> Details, and flashing with esptool instead: [docs/hardware/reference-board.md](docs/hardware/reference-board.md).
 
 ### 3. Plug in
 

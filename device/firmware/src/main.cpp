@@ -9,7 +9,8 @@
 // - The Hardware Profile from its flash partition, the reference one when it
 //   is blank or holds one the firmware can't drive.
 // - Preferences and installed Themes and Sprite Packs in LittleFS.
-// - The LEDs through FastLED, the Device core's frame laid on the wiring.
+// - The LEDs through FastLED, the Device core's frame laid on the wiring
+//   under the current cap.
 #include <Arduino.h>
 #include <FastLED.h>
 #include <LittleFS.h>
@@ -128,9 +129,9 @@ void setup() {
   wiring = std::make_unique<device::LedWiring>(profile);
   leds.assign(wiring->count(), CRGB::Black);
   addLeds(profile.dataPin, leds.data(), static_cast<int>(leds.size()));
-  // The core keeps every channel under the brightness cap, which is what
-  // keeps the matrix inside its current budget: FastLED's power limiter
-  // (modelled on 5050 LEDs) would dim bright frames below the cap.
+  // The core keeps every channel under the brightness cap, and LedWiring
+  // dims a frame whose estimated draw exceeds the profile's current_cap_ma:
+  // FastLED's own brightness and power limiter stay out of it.
   FastLED.setBrightness(255);
   FastLED.setDither(DISABLE_DITHER);
   FastLED.show();

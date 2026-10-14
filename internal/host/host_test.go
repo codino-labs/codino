@@ -345,18 +345,28 @@ func TestHostClaimsOnlyADeviceThatAnswersTheHandshakeEvenAfterBootNoise(t *testi
 }
 
 func TestHostRefusesADeviceOnAnotherProtocolVersion(t *testing.T) {
-	clock := clockAt(1760432400000)
-	newer := newFakeDevice(strings.Replace(fixture(t, "hello-reply.jsonl"), `"protocol":0`, `"protocol":1`, 1))
-	h := host.New(clock, devices(newer))
-	defer h.Close()
-	apply(t, h, host.Event{SessionID: "a", State: host.Working})
+	for _, tc := range []struct {
+		name, protocol, problem, updateURL string
+	}{
+		{"older firmware", `"protocol":-1`, "update the firmware with the web flasher, " + devicelink.FlasherURL, devicelink.FlasherURL},
+		{"newer firmware", `"protocol":1`, "update Codino on this Host", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := clockAt(1760432400000)
+			dev := newFakeDevice(strings.Replace(fixture(t, "hello-reply.jsonl"), `"protocol":0`, tc.protocol, 1))
+			h := host.New(clock, devices(dev))
+			defer h.Close()
+			apply(t, h, host.Event{SessionID: "a", State: host.Working})
 
-	h.Tick()
+			h.Tick()
 
-	assertMessages(t, newer.Received(), []string{fixture(t, "hello.jsonl")})
-	dev := h.Status().Device
-	if dev.Claimed || !strings.Contains(dev.Problem, "update the firmware") {
-		t.Errorf("Status().Device = %+v, want unclaimed with an update-firmware problem", dev)
+			// The hello is all it gets: the Device shows "update me".
+			assertMessages(t, dev.Received(), []string{fixture(t, "hello.jsonl")})
+			st := h.Status().Device
+			if st.Claimed || !strings.Contains(st.Problem, tc.problem) || st.UpdateURL != tc.updateURL {
+				t.Errorf("Status().Device = %+v, want unclaimed, saying %q, update URL %q", st, tc.problem, tc.updateURL)
+			}
+		})
 	}
 }
 

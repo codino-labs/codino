@@ -4,6 +4,9 @@
 // (device/firmware) is verified by hand on the reference board.
 #include <doctest.h>
 
+#include <algorithm>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <string>
 #include <vector>
@@ -133,6 +136,7 @@ TEST_CASE("LED wiring: a Device turned by the rotation Preference sends the turn
   device::HardwareProfile profile = testsupport::profile8x8();
   profile.serpentine = true;
   profile.colorOrder = "RGB";
+  profile.currentCapMa = 65535;  // no current limit: the frame goes out as the core renders it
   testsupport::FakeClock clock;
   device::DeviceCore core(profile, "0.1.0", clock);
   core.receive(testsupport::preferences(R"("rotation":180)"));
@@ -143,6 +147,81 @@ TEST_CASE("LED wiring: a Device turned by the rotation Preference sends the turn
   CHECK(std::vector<uint8_t>(bytes.begin(), bytes.begin() + 3) == std::vector<uint8_t>{224, 224, 128});  // (7, 7)
   CHECK(std::vector<uint8_t>(bytes.begin() + 3 * 8, bytes.begin() + 3 * 9) ==
         std::vector<uint8_t>{0, 192, 128});  // (0, 6)
+}
+
+// --- Current limit
+//
+// The data line never carries a frame the power model says draws more than
+// the Hardware Profile's current_cap_ma: FastLED's model of a 5050 WS2812B,
+// 16, 11 and 15 mA for red, green and blue at 255 and 1 mA per LED while dark.
+
+namespace {
+
+device::HardwareProfile panel16x16(uint16_t currentCapMa) {
+  device::HardwareProfile profile;
+  profile.width = 16;
+  profile.height = 16;
+  profile.colorOrder = "RGB";
+  profile.currentCapMa = currentCapMa;
+  return profile;
+}
+
+// The model's draw of the LEDs, in mA, for the bytes of an RGB data line.
+double drawMa(const std::vector<uint8_t>& rgb) {
+  double ma = 0;
+  for (size_t i = 0; i < rgb.size(); i += 3) ma += 1 + (rgb[i] * 16 + rgb[i + 1] * 11 + rgb[i + 2] * 15) / 255.0;
+  return ma;
+}
+
+}  // namespace
+
+TEST_CASE("current limit: a frame inside the current cap goes out as it is") {
+  device::PixelBuffer frame(16, 16);
+  frame.set(3, 4, {255, 255, 255});  // one white LED: 42 mA, plus 256 dark
+  const auto bytes = sent(panel16x16(330), frame);
+  CHECK(drawMa(bytes) == doctest::Approx(298));
+  CHECK(std::vector<uint8_t>(bytes.begin() + 3 * (4 * 16 + 3), bytes.begin() + 3 * (4 * 16 + 4)) ==
+        std::vector<uint8_t>{255, 255, 255});
+}
+
+TEST_CASE("current limit: a frame over the current cap is dimmed until it fits, its colors kept") {
+  device::PixelBuffer frame(16, 16);
+  frame.fill({128, 64, 0});  // an orange Takeover: 946 mA by the model
+  const auto bytes = sent(panel16x16(330), frame);
+  CHECK(drawMa(bytes) <= 330);
+  CHECK(drawMa(bytes) >= 290);  // not dimmer than it has to be
+  for (size_t i = 0; i < bytes.size(); i += 3) {
+    CAPTURE(i);
+    CHECK(std::vector<uint8_t>(bytes.begin() + i, bytes.begin() + i + 3) ==
+          std::vector<uint8_t>(bytes.begin(), bytes.begin() + 3));  // still one color
+    CHECK(bytes[i] > bytes[i + 1]);                                 // still more red than green
+    CHECK(bytes[i + 2] == 0);
+  }
+}
+
+TEST_CASE("current limit: a dim pixel stays lit while the limit dims a bright frame") {
+  device::PixelBuffer frame(16, 16);
+  frame.fill({255, 255, 255});
+  frame.set(0, 0, {0, 0, 3});
+  const auto bytes = sent(panel16x16(330), frame);
+  CHECK(drawMa(bytes) <= 330);
+  CHECK(std::vector<uint8_t>(bytes.begin(), bytes.begin() + 3) == std::vector<uint8_t>{0, 0, 1});
+}
+
+TEST_CASE("current limit: the reference board's Takeover at its brightness cap is not dimmed") {
+  // A whole-matrix Takeover in red, as the core caps it (48 of 255): 257 mA
+  // by the model, inside the reference build's 300.
+  device::PixelBuffer frame(8, 8);
+  frame.fill({48, 0, 0});
+  const auto bytes = sent(device::referenceHardwareProfile(), frame);
+  for (size_t i = 0; i < bytes.size(); i += 3) CHECK(bytes[i] == 48);
+}
+
+TEST_CASE("current limit: a cap the dark LEDs alone exceed leaves the matrix dark") {
+  device::PixelBuffer frame(16, 16);
+  frame.fill({255, 0, 0});
+  const auto bytes = sent(panel16x16(200), frame);  // 256 LEDs draw 256 mA dark
+  CHECK(std::all_of(bytes.begin(), bytes.end(), [](uint8_t b) { return b == 0; }));
 }
 
 // --- Stored Hardware Profile
@@ -353,4 +432,57 @@ TEST_CASE("flash stores: an install the flash can't hold is refused") {
   flash.full = true;
   BootedDevice device(flash);
   CHECK(parsedLine(device.core.receive(testsupport::fixture("install-sprite-pack.jsonl")))["ok"] == false);
+}
+
+// --- The web flasher's Hardware Profile images
+//
+// The web flasher (device/flasher) writes the chosen Hardware Profile into
+// the hwprofile partition. Its encoder (hardware_profile.mjs, tested with
+// Node against the same files) and this decoder share golden files, so the
+// two can't drift: hardware-profiles.tsv holds the line each preset (and a
+// Custom example) is stored as, hwprofile-esp32-s3-matrix.bin the whole 4 KB
+// partition image of the preselected one.
+
+namespace {
+
+// id → stored line, from test/golden/hardware-profiles.tsv.
+std::vector<std::pair<std::string, std::string>> goldenProfiles() {
+  std::ifstream in(std::string(GOLDEN_DIR) + "/hardware-profiles.tsv");
+  REQUIRE(in.good());
+  std::vector<std::pair<std::string, std::string>> out;
+  for (std::string row; std::getline(in, row);) {
+    const size_t tab = row.find('\t');
+    REQUIRE(tab != std::string::npos);
+    out.emplace_back(row.substr(0, tab), row.substr(tab + 1));
+  }
+  return out;
+}
+
+}  // namespace
+
+TEST_CASE("flasher images: every preset's line is one the Device reads and would store the same way") {
+  const auto golden = goldenProfiles();
+  REQUIRE(golden.size() >= 4);
+  for (const auto& [id, line] : golden) {
+    CAPTURE(id);
+    device::HardwareProfile profile;
+    REQUIRE(device::parseHardwareProfile(line, profile));
+    CHECK(device::hardwareProfileLine(profile) == line);
+  }
+}
+
+TEST_CASE("flasher images: the preselected preset is the reference build, as its whole partition image") {
+  std::ifstream in(std::string(GOLDEN_DIR) + "/hwprofile-esp32-s3-matrix.bin", std::ios::binary);
+  const std::string image((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  REQUIRE(image.size() == 4096);  // the hwprofile partition (firmware/partitions.csv)
+  CHECK(goldenProfiles().front() ==
+        std::make_pair(std::string("esp32-s3-matrix"), device::hardwareProfileLine(device::referenceHardwareProfile())));
+
+  device::HardwareProfile profile;
+  REQUIRE(device::parseHardwareProfile(image, profile));
+  CHECK(reportedProfile(profile) == reportedProfile(device::referenceHardwareProfile()));
+  // What the firmware writes into a blank partition: the line, its newline,
+  // then erased flash.
+  const std::string written = device::hardwareProfileLine(device::referenceHardwareProfile()) + "\n";
+  CHECK(image == written + std::string(4096 - written.size(), '\xFF'));
 }

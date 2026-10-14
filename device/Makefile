@@ -1,7 +1,7 @@
 # Thin wrapper around CMake so the commands are easy to remember.
 BUILD := build
 
-.PHONY: all test update-goldens virtual-device web firmware clean
+.PHONY: all test update-goldens virtual-device web firmware flasher clean
 
 all: $(BUILD)/CMakeCache.txt
 	cmake --build $(BUILD) -j
@@ -98,6 +98,44 @@ $(PIO):
 	python3 -m venv $(PIO_HOME)/venv
 	$(PIO_HOME)/venv/bin/pip install --quiet platformio==$(PLATFORMIO_VERSION)
 endif
+
+# --- Web flasher ---------------------------------------------------------------
+# The static page that flashes the firmware with a Hardware Profile from the
+# browser (flasher/), assembled with the firmware images into $(FLASHER_OUT):
+# serve that directory as static files (GitHub Pages, or locally
+# `python3 -m http.server -d device/build/flasher 8000` and open
+# http://localhost:8000 in Chrome or Edge: Web Serial needs HTTPS or
+# localhost).
+#
+# ESP Web Tools is vendored into the page from its npm release, pinned and
+# SHA-256 checked, fetched once into $(TOOLCHAINS); the page loads no CDN.
+ESP_WEB_TOOLS_VERSION := 10.4.0
+ESP_WEB_TOOLS_SHA256 := f18da75335d2f0dca044c4bb052848c0696e7b03cc23d61d8530dd6eba0a9008
+ESP_WEB_TOOLS := $(TOOLCHAINS)/esp-web-tools-$(ESP_WEB_TOOLS_VERSION)
+FLASHER_OUT := $(BUILD)/flasher
+FIRMWARE_VERSION = $(shell sed -n 's/.*-DFIRMWARE_VERSION=\\"\([^\\]*\)\\".*/\1/p' firmware/platformio.ini)
+PROTOCOL_VERSION = $(shell sed -n 's/.*kProtocolVersion = \([0-9]*\);.*/\1/p' core/device_core.h)
+
+flasher: firmware $(ESP_WEB_TOOLS)/dist/web/install-button.js
+	rm -rf $(FLASHER_OUT)
+	mkdir -p $(FLASHER_OUT)/firmware $(FLASHER_OUT)/vendor
+	cp flasher/index.html flasher/flasher.js flasher/flasher.css flasher/hardware_profile.mjs $(FLASHER_OUT)/
+	cp $(FIRMWARE_OUT)/firmware-merged.bin $(FLASHER_OUT)/firmware/
+	cp -r $(ESP_WEB_TOOLS)/dist/web $(FLASHER_OUT)/vendor/esp-web-tools
+	cp $(ESP_WEB_TOOLS)/LICENSE $(FLASHER_OUT)/vendor/esp-web-tools/
+	@test -n "$(FIRMWARE_VERSION)" && test -n "$(PROTOCOL_VERSION)" || { echo "no firmware or protocol version found"; exit 1; }
+	printf '{"firmware":"%s","protocol":%s,"esp_web_tools":"%s"}\n' \
+		"$(FIRMWARE_VERSION)" "$(PROTOCOL_VERSION)" "$(ESP_WEB_TOOLS_VERSION)" > $(FLASHER_OUT)/build-info.json
+	@echo "web flasher in $(FLASHER_OUT): python3 -m http.server -d device/build/flasher 8000, then http://localhost:8000"
+
+$(ESP_WEB_TOOLS)/dist/web/install-button.js:
+	mkdir -p $(TOOLCHAINS)
+	curl -fL -o $(ESP_WEB_TOOLS).tgz \
+		https://registry.npmjs.org/esp-web-tools/-/esp-web-tools-$(ESP_WEB_TOOLS_VERSION).tgz
+	echo "$(ESP_WEB_TOOLS_SHA256)  $(ESP_WEB_TOOLS).tgz" | $(SHA256SUM) -c -
+	rm -rf $(ESP_WEB_TOOLS) && mkdir -p $(ESP_WEB_TOOLS)
+	tar -xzf $(ESP_WEB_TOOLS).tgz -C $(ESP_WEB_TOOLS) --strip-components=1
+	rm $(ESP_WEB_TOOLS).tgz
 
 clean:
 	rm -rf $(BUILD) firmware/.pio

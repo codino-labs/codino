@@ -46,6 +46,9 @@ type DeviceConnection struct {
 	Protocol int    `json:"protocol"`
 	// Problem explains why no Device is claimed, e.g. a firmware to update.
 	Problem string `json:"problem,omitempty"`
+	// UpdateURL is where to update the firmware (the web flasher) when the
+	// Device is refused for speaking an older protocol version.
+	UpdateURL string `json:"update_url,omitempty"`
 	// Themes and SpritePacks the claimed Device has, built-in ones first.
 	Themes      []string `json:"themes,omitempty"`
 	SpritePacks []string `json:"sprite_packs,omitempty"`
@@ -79,7 +82,7 @@ func (h *Host) Status() Status {
 			SpritePacks: h.onDevice.spritePacks,
 		}
 	} else {
-		st.Device.Problem = h.deviceProblem
+		st.Device.Problem, st.Device.UpdateURL = h.deviceProblem, h.deviceUpdateURL
 	}
 	return st
 }

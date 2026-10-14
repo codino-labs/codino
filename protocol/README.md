@@ -14,11 +14,13 @@ v0 covers the handshake, session upsert, session remove, heartbeat, acknowledge,
 
 ## Handshake
 
-The Host opens the link with `hello`. The Device answers with `hello_reply`. The Host claims a port only after a valid reply, and refuses to drive a Device whose `protocol` differs from its own (it surfaces "update firmware" instead).
+The Host opens the link with `hello`. The Device answers with `hello_reply`. The Host claims a port only after a valid reply, and refuses to drive a Device whose `protocol` differs from its own (Version mismatch, below).
 
 ### `hello` (Host → Device)
 
 A Device answers every `hello`, whatever its fields, so that a Host speaking any protocol version learns which version the Device speaks.
+
+`hello` and the `protocol` and `firmware` fields of `hello_reply` are the part of the protocol that never changes: every version sends `hello` with an integer `protocol`, and answers with a `hello_reply` carrying both. That is what lets an old Device and a newer Host (or the other way round) find out they can't talk.
 
 A `hello` starts a new link: the Device forgets every Agent Session it holds (it keeps its Preferences), and the Host follows a successful handshake with a `preferences` push, then a `session_upsert` for every session it knows. Sessions from an earlier Host Daemon never linger.
 
@@ -48,6 +50,15 @@ Hardware Profile fields:
 | `brightness_cap` | integer 0–255 | Maximum brightness of any LED channel, enforced on everything the Device shows whatever the Preferences say (below). |
 | `current_cap_ma` | integer | Current budget for the matrix, in mA. |
 | `button`, `imu` | bool | Which inputs the build has. |
+
+### Version mismatch
+
+The protocol version is the whole compatibility contract: a Host drives only a Device of its own `protocol`. The `firmware` version is for people (`codino status`); a firmware change the Host depends on bumps `protocol`. So "firmware older than the Host expects" (user story 50) is a Device whose `protocol` is lower than the Host's.
+
+- **The Host** sends `hello`, reads the `hello_reply`, and on another `protocol` closes the port without sending anything else. `codino status` and the web UI say what to update: the firmware, with a link to the web flasher, when the Device's version is lower; Codino on the Host (the plugin) when it is higher. While the Device stays plugged in the Host keeps reporting it without opening the port again, for a minute (`devicelink.RefusedRetry`), then says `hello` once more; replugging (as reflashing does) tries it at once.
+- **The Device** that receives a `hello` whose `protocol` is an integer other than its own still answers it with its `hello_reply`, forgets its sessions, Raw Mode and the preview as for any `hello`, and shows **update me**: an amber arrow pointing up (head in the upper half of the matrix, shaft down the middle), under the brightness cap and turned by the rotation like everything else, Quiet Mode or not. It is not Disconnected: the Host's silence that follows doesn't change it. Until the next `hello` the Device ignores every other message (they come from a Host it can't understand) and sends nothing but `hello_reply`. A `hello` in the Device's own version ends it and starts the link as usual. A `hello` without an integer `protocol` is taken as the Device's own version.
+
+Since a v0 Device does this, a v0 Device plugged into any later Host shows update me: the later Host only has to keep `hello` as it is.
 
 ## Session messages (Host → Device)
 
@@ -272,6 +283,7 @@ The Device answers every `install` and `uninstall` with one, which also counts a
 | Fixture | Direction |
 |---|---|
 | `hello.jsonl` | Host → Device |
+| `hello-newer-protocol.jsonl` | Host → Device: the `hello` of a Host speaking protocol 1, which a v0 Device answers with its `hello_reply` and shows update me |
 | `hello-reply.jsonl` | Device → Host |
 | `session-upsert.jsonl` | Host → Device |
 | `session-remove.jsonl` | Host → Device |

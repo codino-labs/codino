@@ -40,4 +40,9 @@ if (!frame().some((c) => c !== 0)) fail("session-upsert.jsonl: dark");
 receive(fixture("goodbye.jsonl"));
 vd.vd_set_millis(1000 + 60000); // a minute of silence: dark, not Disconnected
 if (frame().some((c) => c !== 0)) fail("goodbye.jsonl: still lit");
+const newer = JSON.parse(receive(fixture("hello-newer-protocol.jsonl")) || "{}");
+if (newer.type !== "hello_reply" || newer.protocol !== 0) fail(`hello-newer-protocol.jsonl answered ${JSON.stringify(newer)}`);
+if (!frame().some((c) => c !== 0)) fail("hello-newer-protocol.jsonl: dark, no update me");
+receive(fixture("hello.jsonl"));
+if (frame().some((c) => c !== 0)) fail("hello.jsonl after hello-newer-protocol.jsonl: still lit");
 console.log("browser Virtual Device: OK against the protocol fixtures");

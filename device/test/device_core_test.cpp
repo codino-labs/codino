@@ -1772,3 +1772,133 @@ TEST_CASE_FIXTURE(Device8x8, "a hello after a goodbye resumes as usual, Disconne
   clock.advance(kTimeout);
   CHECK(core.render() == disconnectedFrame({"working"}));
 }
+
+// --- Update me --------------------------------------------------------------
+//
+// A Host that speaks another protocol version refuses to drive the Device.
+// Its hello says which version it speaks, which every version of the
+// protocol keeps (protocol/README.md), so the Device shows "update me" (an
+// arrow pointing up) instead of Disconnected, until a Host it can talk to
+// says hello.
+
+namespace {
+
+// Lit pixels per row of the frame.
+std::vector<int> litPerRow(const device::PixelBuffer& frame) {
+  std::vector<int> lit(frame.height());
+  for (uint8_t y = 0; y < frame.height(); ++y)
+    for (uint8_t x = 0; x < frame.width(); ++x) lit[y] += frame.at(x, y) != device::Rgb{};
+  return lit;
+}
+
+// True when the frame is an arrow pointing up, in one color: lit at the
+// middle of the top and bottom rows, mirror-symmetric, its widest row (the
+// head) in the upper half and the bottom row (the shaft) narrower.
+bool isUpArrow(const device::PixelBuffer& frame) {
+  const int w = frame.width(), h = frame.height();
+  device::Rgb color{};
+  for (int y = 0; y < h; ++y)
+    for (int x = 0; x < w; ++x) {
+      const device::Rgb c = frame.at(x, y);
+      if (c != frame.at(w - 1 - x, y)) return false;
+      if (c == device::Rgb{}) continue;
+      if (color == device::Rgb{}) color = c;
+      if (c != color) return false;
+    }
+  const auto lit = litPerRow(frame);
+  const int widest = static_cast<int>(std::max_element(lit.begin(), lit.end()) - lit.begin());
+  return frame.at(w / 2, 0) != device::Rgb{} && frame.at(w / 2, h - 1) != device::Rgb{} && widest < h / 2 &&
+         lit[h - 1] < lit[widest] && frame.at(0, h - 1) == device::Rgb{};
+}
+
+device::PixelBuffer updateMeFrame() {
+  FakeClock clock;
+  device::DeviceCore core(profile8x8(), "0.1.0", clock, abstractTheme());
+  core.receive(fixture("hello-newer-protocol.jsonl"));
+  return core.render();
+}
+
+}  // namespace
+
+TEST_CASE_FIXTURE(Device8x8, "a hello in a newer protocol version is answered as any hello, and the matrix asks for an update") {
+  core.receive(upsert("s1", "awaiting_input"));
+
+  // The reply tells the Host which version the Device speaks: the same
+  // hello_reply as to a Host of its own version.
+  CHECK(core.receive(fixture("hello-newer-protocol.jsonl")) == core.receive(fixture("hello.jsonl")));
+  core.receive(fixture("hello-newer-protocol.jsonl"));
+
+  const auto frame = core.render();
+  CHECK(isUpArrow(frame));
+  CHECK(frame != disconnectedFrame({}));
+  for (const char* state : kStatesByUrgency) {
+    CAPTURE(state);
+    CHECK(frame != loneSessionFrame(state));
+  }
+}
+
+TEST_CASE("update me is an arrow on any matrix size") {
+  for (const auto& [w, h] : {std::pair{8, 8}, std::pair{16, 16}, std::pair{32, 8}, std::pair{5, 7}}) {
+    CAPTURE(w);
+    CAPTURE(h);
+    device::HardwareProfile profile = profile8x8();
+    profile.width = static_cast<uint8_t>(w);
+    profile.height = static_cast<uint8_t>(h);
+    FakeClock clock;
+    device::DeviceCore core(profile, "0.1.0", clock, abstractTheme());
+    core.receive(fixture("hello-newer-protocol.jsonl"));
+    CHECK(isUpArrow(core.render()));
+  }
+}
+
+TEST_CASE("a hello in an older protocol version asks for an update too") {
+  // The Host refuses to drive a Device of another version either way; it
+  // tells the human what to update (codino status).
+  FakeClock clock;
+  device::DeviceCore core(profile8x8(), "0.1.0", clock, abstractTheme());
+  core.receive(R"({"type":"hello","protocol":-1,"host_time":1760432400000})");
+  CHECK(core.render() == updateMeFrame());
+}
+
+TEST_CASE_FIXTURE(Device8x8, "update me holds through the Host's silence: it is no Disconnected") {
+  core.receive(fixture("hello-newer-protocol.jsonl"));
+  for (int i = 0; i < 10; ++i) {
+    clock.advance(kTimeout);
+    CHECK(core.render() == updateMeFrame());
+  }
+}
+
+TEST_CASE_FIXTURE(Device8x8, "while it asks for an update the Device ignores everything but hello") {
+  core.receive(fixture("hello-newer-protocol.jsonl"));
+  for (const std::string& line : {upsert("s1", "awaiting_input"), fixture("raw-mode-enter.jsonl"), fixture("raw-frame.bin"),
+                                  fixture("preview-enter.jsonl"), fixture("heartbeat.jsonl"), fixture("goodbye.jsonl")}) {
+    CAPTURE(line.substr(0, 40));
+    CHECK(core.receive(line).empty());
+    CHECK(core.render() == updateMeFrame());
+  }
+}
+
+TEST_CASE_FIXTURE(Device8x8, "a hello in the Device's own version ends update me") {
+  core.receive(fixture("hello-newer-protocol.jsonl"));
+
+  core.receive(fixture("hello.jsonl"));
+  CHECK(isDark(core.render()));
+  core.receive(upsert("s1", "working"));
+  CHECK(core.render() == loneSessionFrame("working"));
+}
+
+TEST_CASE("update me stays under the brightness cap, turned by the rotation, and shows in Quiet Mode") {
+  FakeClock clock;
+  device::DeviceCore core(cappedProfile(40), "0.1.0", clock, abstractTheme());
+  core.receive(preferences(R"("theme":"minimal","quiet_mode":true,"rotation":180)"));
+  core.receive(fixture("hello-newer-protocol.jsonl"));
+
+  const auto frame = core.render();
+  CHECK(brightestChannel(frame) <= 40);
+  CHECK_FALSE(isDark(frame));
+  CHECK_FALSE(isUpArrow(frame));  // upside down: the Device is mounted the other way round
+  core.receive(fixture("hello.jsonl"));
+  core.receive(preferences(R"("theme":"minimal","quiet_mode":true)"));
+  core.receive(fixture("hello-newer-protocol.jsonl"));
+  CHECK(isUpArrow(core.render()));
+}

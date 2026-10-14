@@ -37,3 +37,12 @@ add_test(NAME device_core_test COMMAND device_core_test)
 add_executable(virtual-device virtual/terminal/main.cpp)
 find_package(Threads REQUIRED)
 target_link_libraries(virtual-device PRIVATE device_core device_shell Threads::Threads)
+
+# The web flasher's Hardware Profile encoder (flasher/), against the golden
+# files the C++ tests also check. Needs Node; skipped without it.
+find_program(NODE node)
+if(NODE)
+  add_test(NAME flasher_test COMMAND ${NODE} --test ${CMAKE_CURRENT_SOURCE_DIR}/flasher/hardware_profile.test.mjs)
+else()
+  message(STATUS "node not found: the web flasher's encoder tests are skipped")
+endif()

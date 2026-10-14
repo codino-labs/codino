@@ -210,12 +210,19 @@ std::string DeviceCore::receive(std::string_view line) {
   auto noteHostTime = [&] {
     if (message["host_time"].is<int64_t>()) heardHostTime(message["host_time"]);
   };
+  // A Host of another protocol version refuses to drive the Device: until a
+  // Host it can talk to says hello, nothing else it hears is for it.
+  if (updateWanted_ && type != "hello") return {};
   if (type == "hello") {
     // A new link: the Host follows with every session it knows, so sessions
     // from an earlier Host Daemon must not linger, nor its Raw Mode.
     sessions_.clear();
     rawMode_ = false;
     preview_ = false;
+    // Every version's hello says which version the Host speaks: another
+    // one than the Device's means an update is due (protocol/README.md).
+    JsonVariantConst protocol = message["protocol"];
+    updateWanted_ = protocol.is<int64_t>() && protocol.as<int64_t>() != kProtocolVersion;
     noteHostTime();
     hostMessage();
     return helloReply();
@@ -402,6 +409,23 @@ void DeviceCore::renderDisconnected() {
   }
 }
 
+// "Update me": an amber arrow pointing up, its head as wide as the matrix
+// in the upper half, its shaft down the middle to the bottom row. Nothing
+// else the Device shows is an arrow, or this color.
+void DeviceCore::renderUpdateMe() {
+  constexpr Rgb kUpdateMe{255, 110, 0};
+  frame_.fill(Rgb{});
+  const int w = frame_.width(), h = frame_.height();
+  const int left = (w - 1) / 2, right = w / 2;  // the middle column, or the two of an even width
+  const int headRows = std::max(1, std::min((w + 1) / 2, h / 2));
+  for (int y = 0; y < h; ++y) {
+    const int spread = y < headRows ? y : 0;
+    for (int x = std::max(0, left - spread); x <= std::min(w - 1, right + spread); ++x) {
+      frame_.set(static_cast<uint8_t>(x), static_cast<uint8_t>(y), kUpdateMe);
+    }
+  }
+}
+
 // Where Escalation is for a session Awaiting Input. Latches the steady glow.
 DeviceCore::EscalationStep DeviceCore::escalationStep(Session& session) {
   if (session.state != SessionState::AwaitingInput) return {};
@@ -558,6 +582,10 @@ Rgb DeviceCore::colorOf(const Session& session) const {
 // preview, which shows its lone session in place of the Device's sessions and
 // Raw Mode; then Raw Mode; then the sessions.
 void DeviceCore::renderFrame() {
+  if (updateWanted_) {
+    renderUpdateMe();
+    return;
+  }
   if (disconnected()) {
     renderDisconnected();
     return;

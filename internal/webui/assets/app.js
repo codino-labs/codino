@@ -204,6 +204,17 @@ function render() {
   const link = $("#link");
   link.classList.toggle("ok", !!d.claimed);
   link.textContent = d.claimed ? `Device: ${d.name}` : d.problem ? `No Device: ${d.problem}` : "No Device connected: preview only";
+  if (!d.claimed && d.update_url) {
+    // A firmware too old for this Host: the problem ends with the web
+    // flasher's URL, shown as a link.
+    link.textContent = `No Device: ${d.problem.replace(d.update_url, "")}`;
+    const a = document.createElement("a");
+    a.href = d.update_url;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = d.update_url;
+    link.append(a);
+  }
 
   const n = (status.sessions || []).length;
   $("#sessions").textContent = n === 0 ? "No Agent Sessions." :

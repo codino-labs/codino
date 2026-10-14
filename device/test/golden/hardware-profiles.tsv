@@ -1,0 +1,4 @@
+esp32-s3-matrix	{"width":8,"height":8,"data_pin":14,"serpentine":false,"color_order":"RGB","brightness_cap":48,"current_cap_ma":300,"button":false,"imu":true}
+esp32-s3-matrix-8x8-panel	{"width":8,"height":8,"data_pin":1,"serpentine":false,"color_order":"GRB","brightness_cap":64,"current_cap_ma":330,"button":false,"imu":true}
+esp32-s3-matrix-16x16-panel	{"width":16,"height":16,"data_pin":1,"serpentine":true,"color_order":"GRB","brightness_cap":32,"current_cap_ma":330,"button":false,"imu":true}
+custom-example	{"width":32,"height":8,"data_pin":48,"serpentine":true,"color_order":"BRG","brightness_cap":255,"current_cap_ma":65535,"button":true,"imu":false}

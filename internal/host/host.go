@@ -40,7 +40,10 @@ type Host struct {
 	// lastHeartbeat is when the Device last heard from the Host.
 	lastHeartbeat time.Time
 	// deviceProblem is why the last claim failed, at lastFailedClaim.
-	deviceProblem   string
+	deviceProblem string
+	// deviceUpdateURL is the web flasher's, when deviceProblem is a
+	// firmware too old for this Host.
+	deviceUpdateURL string
 	lastFailedClaim time.Time
 	closed          bool
 
@@ -395,6 +398,11 @@ func (h *Host) claim() {
 			slog.Info("no Device claimed", "problem", problem)
 			h.deviceProblem = problem
 		}
+		h.deviceUpdateURL = ""
+		var mismatch *devicelink.VersionMismatchError
+		if errors.As(err, &mismatch) && mismatch.FirmwareOutdated() {
+			h.deviceUpdateURL = devicelink.FlasherURL
+		}
 		h.lastFailedClaim = now
 		return
 	}
@@ -405,7 +413,7 @@ func (h *Host) claim() {
 	slog.Info("Device claimed", "device", dev.Name, "firmware", dev.HelloReply.Firmware)
 	h.device = dev
 	h.onDevice = installedOnDevice(dev)
-	h.deviceProblem = ""
+	h.deviceProblem, h.deviceUpdateURL = "", ""
 	h.lastFailedClaim = time.Time{}
 	h.lastHeartbeat = now // hello counts as one
 	msgs, frame := h.greeting()

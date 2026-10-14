@@ -195,6 +195,7 @@ class DeviceCore {
   bool disconnected();
   void hostMessage();
   void renderDisconnected();
+  void renderUpdateMe();
   // Renders the picture into frame_ for the current clock time.
   void renderFrame();
   // Renders sessions_: a Takeover, the Aggregate State or the Tiles.
@@ -289,6 +290,9 @@ class DeviceCore {
   // The Host said goodbye (it exited cleanly): its silence is no
   // Disconnected, until any usable message ends it.
   bool saidGoodbye_ = false;
+  // A Host of another protocol version said hello: the Device shows "update
+  // me" and ignores everything but the next hello.
+  bool updateWanted_ = false;
 };
 
 }  // namespace device

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Codino flasher</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="flasher.css">
+<!-- ESP Web Tools, vendored by `make -C device flasher` from its pinned npm
+     release (device/Makefile): the page needs no CDN. -->
+<script type="module" src="vendor/esp-web-tools/install-button.js"></script>
+<script type="module" src="flasher.js"></script>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Flash Codino</h1>
+    <p id="build" class="muted">Firmware build: loading…</p>
+  </header>
+
+  <p id="browser" class="warning" hidden>
+    This page writes to the board over Web Serial, which only desktop Chrome and Edge have.
+    Open it in one of them.
+  </p>
+
+  <section>
+    <h2><span class="step">1</span> Choose your build</h2>
+    <p>The Hardware Profile tells the firmware how your matrix is wired. It is stored on the board, apart from the
+      firmware, so later updates keep it unless you choose another one here.</p>
+    <fieldset id="presets">
+      <legend>Hardware Profile</legend>
+    </fieldset>
+
+    <form id="custom" hidden>
+      <div class="grid">
+        <label>Width <input name="width" type="number" min="1" max="255" required></label>
+        <label>Height <input name="height" type="number" min="1" max="255" required></label>
+        <label>Data pin (GPIO) <select name="data_pin"></select></label>
+        <label>Color order
+          <select name="color_order">
+            <option>RGB</option><option>GRB</option><option>BRG</option>
+            <option>RBG</option><option>GBR</option><option>BGR</option>
+          </select>
+        </label>
+        <label>Brightness cap (1–255) <input name="brightness_cap" type="number" min="1" max="255" required></label>
+        <label>Current cap (mA) <input name="current_cap_ma" type="number" min="1" max="65535" required></label>
+      </div>
+      <label class="check"><input name="serpentine" type="checkbox"> Serpentine (zig-zag) wiring: every other row runs backwards</label>
+      <label class="check"><input name="button" type="checkbox"> A button to Acknowledge</label>
+      <label class="check"><input name="imu" type="checkbox"> An IMU (QMI8658)</label>
+      <p class="muted">The current cap is what the matrix may draw. On a 500 mA USB port, leave about 100 mA for the
+        board and 1 mA for every LED that stays dark, e.g. a built-in matrix you don't use.</p>
+    </form>
+    <ul id="problems" class="error" hidden></ul>
+    <details>
+      <summary>What gets written</summary>
+      <p>This line, at <code>0x210000</code> (the <code>hwprofile</code> partition):</p>
+      <pre id="line"></pre>
+    </details>
+  </section>
+
+  <section>
+    <h2><span class="step">2</span> Put the board in download mode</h2>
+    <ol>
+      <li>Plug the board in with a USB cable that carries data.</li>
+      <li><strong>Hold BOOT, press and release RESET, then release BOOT.</strong> (Or plug it in with BOOT held.)</li>
+    </ol>
+    <p class="muted">You need this every time, updates included. Codino's firmware never jumps into download mode
+      when a program opens its port, so the Host Daemon can't strand it there by accident. The price is that this
+      page can't put the board there for you.</p>
+  </section>
+
+  <section>
+    <h2><span class="step">3</span> Install</h2>
+    <p>Press Install and choose the board's port. In download mode it is called
+      <strong>USB JTAG/serial debug unit</strong> (or ESP32-S3), not "Codino".</p>
+    <esp-web-install-button id="install">
+      <button slot="activate" id="activate">Install</button>
+      <span slot="unsupported" class="warning">Your browser has no Web Serial: use desktop Chrome or Edge.</span>
+      <span slot="not-allowed" class="warning">Web Serial needs HTTPS, or this page on http://localhost.</span>
+    </esp-web-install-button>
+    <ul class="muted">
+      <li>Asked whether to erase the device? <strong>Yes</strong> on a first install. <strong>No</strong> keeps your
+        cached Preferences and installed Themes when you update.</li>
+      <li>"Failed to initialize" means the board isn't in download mode: repeat step 2 and try again.</li>
+      <li>When it's done, press RESET if the matrix stays dark. About 5 seconds later it shows Disconnected, a dim
+        diagonal, until the Codino plugin's Host Daemon finds it.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

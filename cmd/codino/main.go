@@ -106,7 +106,8 @@ func event(paths daemon.Paths, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() > 0 || (*end && (*state != "" || *acknowledge)) || (!*end && *state == "" && !*acknowledge) {
+	// Either the session ended, or it changed (a state, an Acknowledge or both).
+	if changed := *state != "" || *acknowledge; fs.NArg() > 0 || changed == *end {
 		fmt.Fprintf(os.Stderr, "%s event: give --state, --acknowledge or --end\n%s", name, usage)
 		return errUsage
 	}

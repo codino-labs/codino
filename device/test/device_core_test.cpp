@@ -532,7 +532,7 @@ TEST_CASE("after 30 s ignored Awaiting Input pulses faster and brighter") {
 namespace {
 
 // Moves the clock on by `ms`, the Host's heartbeat keeping the link alive.
-void waitWithHeartbeats(device::DeviceCore& core, FakeClock& clock, uint32_t ms) {
+void advanceWithHeartbeats(device::DeviceCore& core, FakeClock& clock, uint32_t ms) {
   for (; ms >= kSecond; ms -= kSecond) {
     clock.advance(kSecond);
     core.receive(heartbeat(clock));
@@ -545,12 +545,12 @@ constexpr device::Rgb kPink{0xff, 0x3d, 0xa5};
 
 }  // namespace
 
-TEST_CASE_FIXTURE(Device8x8, "after 2 min ignored the whole matrix is taken over in the waiting session's Project Color") {
-  core.receive(upsert("waiting", "awaiting_input", "#2ad14f"));
+TEST_CASE_FIXTURE(Device8x8, "after 2 min ignored the whole matrix is taken over in the Project Color of the session Awaiting Input") {
+  core.receive(upsert("asking", "awaiting_input", "#2ad14f"));
   core.receive(upsert("busy", "working", "#ff3da5"));
   core.receive(upsert("broken", "error", "#ff3da5"));
 
-  waitWithHeartbeats(core, clock, 2 * kMinute);
+  advanceWithHeartbeats(core, clock, 2 * kMinute);
   const Watched w = watch(core, clock, 5 * kSecond);
 
   CHECK(w.alwaysSolidLit);
@@ -561,7 +561,7 @@ TEST_CASE_FIXTURE(Device8x8, "after 2 min ignored the whole matrix is taken over
 TEST_CASE_FIXTURE(Device8x8, "with several sessions in Takeover the matrix cycles between their Project Colors about once a second") {
   core.receive(upsert("a", "awaiting_input", "#2ad14f"));
   core.receive(upsert("b", "awaiting_input", "#ff3da5"));
-  waitWithHeartbeats(core, clock, 3 * kMinute);
+  advanceWithHeartbeats(core, clock, 3 * kMinute);
 
   // How long each color holds, in 20 ms samples.
   std::vector<std::pair<device::Rgb, int>> runs;
@@ -584,8 +584,8 @@ TEST_CASE_FIXTURE(Device8x8, "with several sessions in Takeover the matrix cycle
 }
 
 TEST_CASE_FIXTURE(Device8x8, "after 10 min ignored Awaiting Input settles into a steady glow") {
-  core.receive(upsert("waiting", "awaiting_input", "#2ad14f"));
-  waitWithHeartbeats(core, clock, 10 * kMinute);
+  core.receive(upsert("asking", "awaiting_input", "#2ad14f"));
+  advanceWithHeartbeats(core, clock, 10 * kMinute);
 
   const Watched w = watch(core, clock, 5 * kSecond);
 
@@ -594,25 +594,25 @@ TEST_CASE_FIXTURE(Device8x8, "after 10 min ignored Awaiting Input settles into a
   CHECK(sameHue(w.colors[0], awaitingInputHue()));
 }
 
-TEST_CASE_FIXTURE(Device8x8, "the matrix shows the most insistent Escalation step of the waiting sessions") {
+TEST_CASE_FIXTURE(Device8x8, "the matrix shows the most insistent Escalation step of the sessions Awaiting Input") {
   core.receive(upsert("old", "awaiting_input", "#2ad14f"));
-  waitWithHeartbeats(core, clock, 11 * kMinute);  // steady glow
+  advanceWithHeartbeats(core, clock, 11 * kMinute);  // steady glow
   core.receive(upsert("older", "awaiting_input", "#ff3da5", hostTime(clock)));
-  waitWithHeartbeats(core, clock, 45 * kSecond);  // faster
+  advanceWithHeartbeats(core, clock, 45 * kSecond);  // faster
   core.receive(upsert("new", "awaiting_input", "#ff3da5", hostTime(clock)));  // gentle
 
   const Watched mixed = watch(core, clock, 10 * kSecond);
   FakeClock aloneClock;
   device::DeviceCore alone(profile8x8(), "0.1.0", aloneClock);
   alone.receive(upsert("s", "awaiting_input"));
-  waitWithHeartbeats(alone, aloneClock, 45 * kSecond);
+  advanceWithHeartbeats(alone, aloneClock, 45 * kSecond);
   const Watched faster = watch(alone, aloneClock, 10 * kSecond);
 
   CHECK(mixed.peaks == faster.peaks);
   CHECK(mixed.brightest == faster.brightest);
   CHECK(mixed.dimmest == faster.dimmest);
 
-  waitWithHeartbeats(core, clock, 80 * kSecond);  // "older" waited 2 min 15 s
+  advanceWithHeartbeats(core, clock, 80 * kSecond);  // "older" waited 2 min 15 s
   CHECK(core.render().at(0, 0) == kPink);
 }
 
@@ -622,11 +622,11 @@ namespace {
 
 // The frame `ms` after a lone session started Awaiting Input on a fresh
 // Device: Escalation from the start.
-device::PixelBuffer waitingFor(uint32_t ms) {
+device::PixelBuffer awaitingInputFor(uint32_t ms) {
   FakeClock clock;
   device::DeviceCore core(profile8x8(), "0.1.0", clock);
   core.receive(upsert("s", "awaiting_input"));
-  waitWithHeartbeats(core, clock, ms);
+  advanceWithHeartbeats(core, clock, ms);
   return core.render();
 }
 
@@ -636,16 +636,16 @@ TEST_CASE_FIXTURE(Device8x8, "an Acknowledge on the Device restarts Escalation b
   core.receive(upsert("a", "awaiting_input", "#2ad14f"));
   core.receive(upsert("b", "awaiting_input", "#ff3da5"));
   core.receive(upsert("c", "done"));
-  waitWithHeartbeats(core, clock, 3 * kMinute);  // Takeover
+  advanceWithHeartbeats(core, clock, 3 * kMinute);  // Takeover
 
   core.acknowledge();
 
-  CHECK(core.render() == waitingFor(0));
-  waitWithHeartbeats(core, clock, 700);
-  CHECK(core.render() == waitingFor(700));
-  waitWithHeartbeats(core, clock, 40 * kSecond);
-  CHECK(core.render() == waitingFor(40 * kSecond + 700));
-  waitWithHeartbeats(core, clock, 2 * kMinute);
+  CHECK(core.render() == awaitingInputFor(0));
+  advanceWithHeartbeats(core, clock, 700);
+  CHECK(core.render() == awaitingInputFor(700));
+  advanceWithHeartbeats(core, clock, 40 * kSecond);
+  CHECK(core.render() == awaitingInputFor(40 * kSecond + 700));
+  advanceWithHeartbeats(core, clock, 2 * kMinute);
   CHECK(isSolidLit(core.render()));
   CHECK((core.render().at(0, 0) == kGreen || core.render().at(0, 0) == kPink));  // Takeover again
 }
@@ -682,11 +682,11 @@ TEST_CASE_FIXTURE(Device8x8, "an Acknowledge from the Host restarts Escalation o
 TEST_CASE_FIXTURE(Device8x8, "an Acknowledge from the Host without a session id is for every session") {
   core.receive(upsert("a", "awaiting_input", "#2ad14f"));
   core.receive(upsert("b", "done"));
-  waitWithHeartbeats(core, clock, 3 * kMinute);
+  advanceWithHeartbeats(core, clock, 3 * kMinute);
 
   core.receive(R"({"type":"acknowledge"})");
 
-  CHECK(core.render() == waitingFor(0));
+  CHECK(core.render() == awaitingInputFor(0));
 }
 
 TEST_CASE_FIXTURE(Device8x8, "Escalation counts from when the session entered Awaiting Input on the Host") {
@@ -702,47 +702,47 @@ TEST_CASE_FIXTURE(Device8x8, "an Acknowledge the Host replays after a hello rest
   core.receive(upsert("a", "awaiting_input", "#2ad14f", kHelloTime - 5 * kMinute));
   core.receive(R"({"type":"acknowledge","id":"a","host_time":)" + std::to_string(kHelloTime - 10500) + "}");
 
-  CHECK(core.render() == waitingFor(10500));
+  CHECK(core.render() == awaitingInputFor(10500));
 }
 
 TEST_CASE_FIXTURE(Device8x8, "an upsert that keeps the Session State keeps the Acknowledge") {
   core.receive(upsert("a", "awaiting_input", "#2ad14f"));
-  waitWithHeartbeats(core, clock, 3 * kMinute);
+  advanceWithHeartbeats(core, clock, 3 * kMinute);
   core.acknowledge();
 
   core.receive(upsert("a", "awaiting_input", "#ff3da5"));  // the Project Color changed
 
-  CHECK(core.render() == waitingFor(0));
+  CHECK(core.render() == awaitingInputFor(0));
 }
 
 TEST_CASE_FIXTURE(Device8x8, "a session that waits again escalates from the new state_entered") {
   core.receive(upsert("a", "awaiting_input", "#2ad14f"));
-  waitWithHeartbeats(core, clock, 3 * kMinute);
+  advanceWithHeartbeats(core, clock, 3 * kMinute);
   core.receive(upsert("a", "working", "#2ad14f", hostTime(clock)));
 
   core.receive(upsert("a", "awaiting_input", "#2ad14f", hostTime(clock)));
 
-  CHECK(core.render() == waitingFor(0));
+  CHECK(core.render() == awaitingInputFor(0));
 }
 
 TEST_CASE("the Escalation thresholds are parameters") {
   FakeClock clock;
   device::Escalation quick;
-  quick.gentleMs = 1 * kSecond;
-  quick.fasterMs = 2 * kSecond;
-  quick.takeoverMs = 3 * kSecond;
+  quick.fasterFromMs = 1 * kSecond;
+  quick.takeoverFromMs = 2 * kSecond;
+  quick.steadyFromMs = 3 * kSecond;
   device::DeviceCore core(profile8x8(), "0.1.0", clock, quick);
   core.receive(upsert("a", "awaiting_input", "#2ad14f"));
 
-  waitWithHeartbeats(core, clock, 2 * kSecond);
+  advanceWithHeartbeats(core, clock, 2 * kSecond);
   CHECK(core.render().at(0, 0) == kGreen);
-  waitWithHeartbeats(core, clock, 1 * kSecond);
+  advanceWithHeartbeats(core, clock, 1 * kSecond);
   CHECK(sameHue(core.render().at(0, 0), awaitingInputHue()));
 }
 
 TEST_CASE_FIXTURE(Device8x8, "the steady glow holds past the millisecond clock wrapping around") {
   core.receive(upsert("a", "awaiting_input", "#2ad14f"));
-  waitWithHeartbeats(core, clock, 11 * kMinute);
+  advanceWithHeartbeats(core, clock, 11 * kMinute);
   const device::PixelBuffer glow = core.render();
 
   clock.advance(UINT32_MAX - 11 * kMinute + 2 * kSecond);  // 2^32 + 1 s after it started waiting

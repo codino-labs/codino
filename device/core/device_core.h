@@ -68,12 +68,13 @@ class PixelBuffer {
 // How Awaiting Input escalates the longer it goes unacknowledged. Defaults in
 // code for now; they become Preferences (#11).
 struct Escalation {
-  // A gentle pulse until gentleMs, then faster and brighter until fasterMs,
-  // then a Takeover until takeoverMs, then a steady glow.
-  uint32_t gentleMs = 30 * 1000;
-  uint32_t fasterMs = 2 * 60 * 1000;
-  uint32_t takeoverMs = 10 * 60 * 1000;
-  // How long each waiting session's Project Color holds when several
+  // When each step starts, counted from when the session entered Awaiting
+  // Input or was last Acknowledged: a gentle pulse first, then faster and
+  // brighter, then a Takeover, then a steady glow.
+  uint32_t fasterFromMs = 30 * 1000;
+  uint32_t takeoverFromMs = 2 * 60 * 1000;
+  uint32_t steadyFromMs = 10 * 60 * 1000;
+  // How long each Awaiting Input session's Project Color holds when several
   // sessions are in Takeover.
   uint32_t takeoverCycleMs = 1000;
 };
@@ -120,8 +121,9 @@ class DeviceCore {
     // Clock time Escalation counts from: when the session entered Awaiting
     // Input or was last Acknowledged.
     uint32_t escalationStart = 0;
-    // Latched once Escalation settles into the steady glow, so waiting longer
-    // than the millis() wrap (~49.7 days) never starts it over.
+    // Latched once Escalation settles into the steady glow, so going
+    // unacknowledged longer than the millis() wrap (~49.7 days) never starts
+    // it over.
     bool settled = false;
   };
   void renderAwaitingInput();

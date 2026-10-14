@@ -117,7 +117,7 @@ make -C device test
 
 Run a single test with `device/build/device_core_test -tc="*Aggregate State*"`.
 
-Escalation (#9) lives in the Device core: per session, from `state_entered` (related to the Device clock through `host_time`) or the latest Acknowledge. Its thresholds are a `device::Escalation` constructor parameter, with defaults until they become Preferences. Escalation tests send `heartbeat(clock)`, whose Host time tracks the fake clock, and compare with frames of a fresh Device (`waitingFor(ms)`) or watch a stretch of frames (`watch`: pulses, brightness, colors).
+Escalation (#9) lives in the Device core: per session, from `state_entered` (related to the Device clock through `host_time`) or the latest Acknowledge. Its thresholds are a `device::Escalation` constructor parameter, with defaults until they become Preferences. Escalation tests send `heartbeat(clock)`, whose Host time tracks the fake clock, and compare with frames of a fresh Device (`awaitingInputFor(ms)`) or watch a stretch of frames (`watch`: pulses, brightness, colors).
 
 The terminal Virtual Device renders every 100 ms even without input, so Disconnected shows 5 s after the Host goes silent:
 

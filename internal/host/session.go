@@ -230,26 +230,23 @@ func (t *tracker) interrupt(id string, at, now time.Time) *session {
 	if at.After(s.lastEventAt) {
 		s.lastEventAt = at
 	}
-	s.toIdle(at)
+	s.enter(Idle, at)
 	return s
 }
 
-// decayDone returns to Idle, entered at now, every session that has been Done
-// for decay: the Done decay timer Acknowledges it. It returns the sessions
-// that changed, by Tile slot.
+// decayDone returns to Idle every session that has been Done for decay by
+// now, entered when the decay was due: the Done decay timer Acknowledges it.
+// It returns the sessions that changed, by Tile slot.
 func (t *tracker) decayDone(now time.Time, decay time.Duration) []*session {
 	var decayed []*session
 	for _, s := range t.ordered() {
 		if s.state == Done && now.Sub(s.stateEntered) >= decay {
-			s.toIdle(now)
+			s.enter(Idle, s.stateEntered.Add(decay))
 			decayed = append(decayed, s)
 		}
 	}
 	return decayed
 }
-
-// toIdle returns the session to Idle, entered at at.
-func (s *session) toIdle(at time.Time) { s.enter(Idle, at) }
 
 // staleToIdle returns a Working session to Idle when neither a hook nor its
 // transcript, last written at modified (zero when unknown), has shown any
@@ -266,7 +263,7 @@ func (t *tracker) staleToIdle(id string, modified, now time.Time) *session {
 	if now.Sub(active) < StaleAfter {
 		return nil
 	}
-	s.toIdle(now)
+	s.enter(Idle, now)
 	return s
 }
 

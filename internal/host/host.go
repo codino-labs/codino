@@ -405,8 +405,8 @@ func (h *Host) unlock() {
 	}
 }
 
-// acknowledge tells the Device when the human last Acknowledged a waiting
-// session, so it restarts Escalation from then.
+// acknowledge tells the Device when the human last Acknowledged a
+// session Awaiting Input, so it restarts Escalation from then.
 func acknowledge(s *session) protocol.Acknowledge {
 	return protocol.NewAcknowledge(s.id, s.acknowledged.UnixMilli())
 }

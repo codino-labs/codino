@@ -47,7 +47,7 @@ func TestDoneDecaysToIdleAfterTheDoneDecayTime(t *testing.T) {
 	}
 }
 
-func TestDoneDecayStampsIdleWhenItHappened(t *testing.T) {
+func TestDoneDecayEntersIdleWhenTheDecayWasDue(t *testing.T) {
 	clock := clockAt(1760432400000)
 	dev := newReferenceDevice(t)
 	h := host.New(clock, devices(dev), host.WithDoneDecay(time.Minute))
@@ -56,7 +56,7 @@ func TestDoneDecayStampsIdleWhenItHappened(t *testing.T) {
 	apply(t, h, host.Event{SessionID: "a", State: host.Working}, host.Event{SessionID: "b", State: host.Done})
 	sent := len(dev.Received())
 
-	clock.Advance(time.Minute)
+	clock.Advance(time.Minute + 70*time.Millisecond) // between two Ticks
 	h.Tick()
 
 	assertMessages(t, withoutHeartbeats(since(dev, sent)), []string{
@@ -99,14 +99,14 @@ func TestAnAcknowledgeOfOneSessionAffectsOnlyThatSession(t *testing.T) {
 		{"Done is cleared", host.Event{SessionID: "done", Acknowledge: true}, []string{
 			`{"type":"session_upsert","id":"done","state":"idle","project_color":"#3a86ff","state_entered":1760432460000,"tile":0}`,
 		}},
-		{"Escalation restarts and Awaiting Input stays", host.Event{SessionID: "waiting", Acknowledge: true}, []string{
-			`{"type":"acknowledge","id":"waiting","host_time":1760432460000}`,
+		{"Escalation restarts and Awaiting Input stays", host.Event{SessionID: "asking", Acknowledge: true}, []string{
+			`{"type":"acknowledge","id":"asking","host_time":1760432460000}`,
 		}},
 		{"a new prompt makes it Working", host.Event{SessionID: "done", State: host.Working, Acknowledge: true}, []string{
 			`{"type":"session_upsert","id":"done","state":"working","project_color":"#3a86ff","state_entered":1760432460000,"tile":0}`,
 		}},
-		{"a new prompt to a waiting session", host.Event{SessionID: "waiting", State: host.Working, Acknowledge: true}, []string{
-			`{"type":"session_upsert","id":"waiting","state":"working","project_color":"#3a86ff","state_entered":1760432460000,"tile":1}`,
+		{"a new prompt to a session Awaiting Input", host.Event{SessionID: "asking", State: host.Working, Acknowledge: true}, []string{
+			`{"type":"session_upsert","id":"asking","state":"working","project_color":"#3a86ff","state_entered":1760432460000,"tile":1}`,
 		}},
 		{"an Idle session has nothing to clear", host.Event{SessionID: "idle", Acknowledge: true}, nil},
 		{"an unknown session is not created", host.Event{SessionID: "unknown", Acknowledge: true}, nil},
@@ -120,10 +120,10 @@ func TestAnAcknowledgeOfOneSessionAffectsOnlyThatSession(t *testing.T) {
 			h.Tick()
 			apply(t, h,
 				host.Event{SessionID: "done", State: host.Done},
-				host.Event{SessionID: "waiting", State: host.AwaitingInput},
+				host.Event{SessionID: "asking", State: host.AwaitingInput},
 				host.Event{SessionID: "idle", State: host.Idle},
 				host.Event{SessionID: "other-done", State: host.Done},
-				host.Event{SessionID: "other-waiting", State: host.AwaitingInput},
+				host.Event{SessionID: "other-asking", State: host.AwaitingInput},
 			)
 			clock.Advance(time.Minute)
 			sent := len(dev.Received())

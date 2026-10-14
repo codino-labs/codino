@@ -89,7 +89,7 @@ The human pressed the button or double-tapped the Device (a key press on the Vir
 
 ### `acknowledge` (Host → Device)
 
-The Host tells the Device when the human Acknowledged one waiting session elsewhere (a `codino event --acknowledge`), and replays it after the `session_upsert` of each Awaiting Input session it Acknowledged when it claims a Device. Clearing Done needs no `acknowledge`: the Host sends the session's `session_upsert` with `idle`, and a new prompt typed into a session makes it Working with a `session_upsert`.
+The Host tells the Device when the human Acknowledged one waiting session elsewhere (a `codino event --acknowledge`), and replays it after the `session_upsert` of each Awaiting Input session it Acknowledged when it claims a Device. The Host clears Done with the session's `session_upsert` with `idle`, and a new prompt typed into a session makes it Working with a `session_upsert`; it sends no `acknowledge` for those. A Device still clears Done on any `acknowledge` it receives, as Acknowledge always does.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -100,9 +100,9 @@ A Device needs nothing but the `type`: without `id` the Acknowledge is for every
 
 ## Escalation and Done decay
 
-Escalation is the Device's (ADR-0001): it renders it from `state_entered`, the latest `acknowledge` and its own clock, relating Host times to its clock through the `host_time` of `hello` and `heartbeat`. A Host time after the Device's estimate of now counts as now. Defaults, until Preferences carry them: a gentle pulse for 30 s, faster and brighter until 2 min, a Takeover of the whole matrix in the waiting session's `project_color` until 10 min (cycling between the Project Colors of every session in Takeover, one a second), then a steady glow. The matrix shows the most insistent step any waiting session has reached: Takeover, faster, gentle, steady glow.
+Escalation is the Device's (ADR-0001): it renders it from `state_entered`, the latest `acknowledge` and its own clock, relating Host times to its clock through the `host_time` of `hello` and `heartbeat`. A Host time after the Device's estimate of now counts as now. Defaults, until Preferences carry them: a gentle pulse for 30 s, faster and brighter until 2 min, a Takeover of the whole matrix in the waiting session's `project_color` until 10 min (cycling between the Project Colors of every session in Takeover, one a second), then a steady glow. The matrix shows the most insistent step any Awaiting Input session has reached: Takeover, faster, gentle, steady glow (a session that has just started to wait outranks one that settled).
 
-Done decay is the Host's: the Session Tracker returns a session that stayed Done for the Done decay time (10 min by default) to Idle, as an Acknowledge of that session, and sends its `session_upsert`. The Host is canonical for Session States, so `codino status` and the Device never disagree about a decayed session.
+Done decay is the Host's: the Session Tracker returns a session that stayed Done for the Done decay time (10 min by default) to Idle, as an Acknowledge of that session only, and sends its `session_upsert` (`state_entered` is when the decay was due). The Host is canonical for Session States, so `codino status` and the Device never disagree about a decayed session.
 
 ## Disconnected
 

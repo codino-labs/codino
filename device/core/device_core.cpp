@@ -100,11 +100,15 @@ std::string DeviceCore::receive(std::string_view line) {
 
   // Every message the Device can use proves the Host is alive.
   std::string_view type = message["type"] | "";
+  // hello and heartbeat carry the Host time they were sent at.
+  auto noteHostTime = [&] {
+    if (message["host_time"].is<int64_t>()) heardHostTime(message["host_time"]);
+  };
   if (type == "hello") {
     // A new link: the Host follows with every session it knows, so sessions
     // from an earlier Host Daemon must not linger.
     sessions_.clear();
-    if (message["host_time"].is<int64_t>()) heardHostTime(message["host_time"]);
+    noteHostTime();
     hostMessage();
     return helloReply();
   } else if (type == "session_upsert") {
@@ -114,7 +118,7 @@ std::string DeviceCore::receive(std::string_view line) {
     auto [it, created] = sessions_.try_emplace(std::string(id));
     Session& session = it->second;
     if (created || session.state != state->state) {
-      // A Device claimed again learns how long a session has been waiting.
+      // A Device claimed again learns how long a session has been in its state.
       session.escalationStart = clockTimeOf(message["state_entered"] | int64_t{0});
       session.settled = false;
     }
@@ -135,7 +139,7 @@ std::string DeviceCore::receive(std::string_view line) {
       if (it != sessions_.end()) acknowledge(it->second, at);
     }
   } else if (type == "heartbeat") {
-    if (message["host_time"].is<int64_t>()) heardHostTime(message["host_time"]);
+    noteHostTime();
   } else {
     return {};
   }
@@ -229,28 +233,30 @@ void DeviceCore::renderDisconnected() {
 }
 
 // Awaiting Input escalates per session; the matrix shows the most insistent
-// step any waiting session has reached: Takeover, then the faster pulse, then
+// step any Awaiting Input session has reached: Takeover, then the faster pulse, then
 // the gentle pulse, then the steady glow.
 void DeviceCore::renderAwaitingInput() {
   const uint32_t now = clock_.millis();
   std::vector<Rgb> takeover;  // the Project Colors in Takeover, in session id order
   bool faster = false;
   bool gentle = false;
-  uint32_t pulseElapsed = 0;  // of the session whose pulse is shown
+  // How far into its step the session whose pulse is shown is, so each
+  // pulse starts at its dimmest when its step starts.
+  uint32_t pulseElapsed = 0;
   for (auto& [id, session] : sessions_) {
     if (session.state != SessionState::AwaitingInput) continue;
-    const uint32_t waited = now - session.escalationStart;
-    if (session.settled || waited >= escalation_.takeoverMs) {
+    const uint32_t unacknowledged = now - session.escalationStart;
+    if (session.settled || unacknowledged >= escalation_.steadyFromMs) {
       session.settled = true;  // steady glow
       continue;
     }
-    if (waited >= escalation_.fasterMs) {
+    if (unacknowledged >= escalation_.takeoverFromMs) {
       takeover.push_back(session.projectColor);
-    } else if (waited >= escalation_.gentleMs) {
-      if (!faster) pulseElapsed = waited;
+    } else if (unacknowledged >= escalation_.fasterFromMs) {
+      if (!faster) pulseElapsed = unacknowledged - escalation_.fasterFromMs;
       faster = true;
     } else if (!faster && !gentle) {
-      pulseElapsed = waited;
+      pulseElapsed = unacknowledged;
       gentle = true;
     }
   }

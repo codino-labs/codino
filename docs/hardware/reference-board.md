@@ -10,8 +10,8 @@ The firmware reports this profile in its `hello_reply`, and `protocol/fixtures/h
 |---|---|---|---|
 | `width`, `height` | 8, 8 | Wiki: "onboard 8\*8 beads matrix of 64 RGB beads" [1]. | Certain |
 | `data_pin` | 14 | Schematic [2]: IO14 drives `LED_DIN` through the level shifter Q1 (DMG1012T). Every Waveshare demo uses `RGB_Control_PIN 14` [3]. | Certain |
-| `serpentine` | `false` | Schematic [2]: U1…U64 are chained row by row (`DOUT_1`…`DOUT_7` link the rows). Waveshare's demos address LED `row*8+col` [3] and use `NEO_MATRIX_ROWS + NEO_MATRIX_PROGRESSIVE` (HTTP demo). | Likely. The schematic shows the electrical chain, not the placement on the PCB. One community ESPHome config maps the matrix as serpentine *columns* turned 180° [5]. Check it on the board (step 4). |
-| `color_order` | `"RGB"` | Waveshare's Color and Game demos use `NEO_RGB` [3]. Robojax, writing for this board, says "The matrix on this board expects RGB order" [4]. | Uncertain. Waveshare's Font and HTTP demos use `NEO_GRB` [3]. Check it on the board (step 4). |
+| `serpentine` | `false` | Schematic [2]: U1…U64 are chained row by row (`DOUT_1`…`DOUT_7` link the rows). Waveshare's demos address LED `row*8+col` [3] and use `NEO_MATRIX_ROWS + NEO_MATRIX_PROGRESSIVE` (HTTP demo). | Confirmed on the board (step 4, 2026-10-16): rows run the same way, not serpentine. |
+| `color_order` | `"RGB"` | Waveshare's Color and Game demos use `NEO_RGB` [3]. Robojax, writing for this board, says "The matrix on this board expects RGB order" [4]. | Confirmed on the board (step 4, 2026-10-16). |
 | `brightness_cap` | 48 | Waveshare warns that high brightness heats the board fast and can damage it [1][3]. Its demos cap brightness at 40–60 of 255 [3]. | A conservative guess. Check the heat (step 9). |
 | `current_cap_ma` | 300 | Leaves 200 mA of a 500 mA USB port: 100 mA for the ESP32-S3 (an estimate) and 100 mA of margin. The firmware enforces it (`LedWiring`, below): by the power model a whole-matrix Takeover in red at the cap of 48 draws 257 mA and goes out as it is; a white frame at the cap (570 mA by the model) is dimmed to fit. | Measure it (step 9). |
 | `button` | `false` | The board has a BOOT button on IO0 [2], but nothing reads it yet. #13 makes it Acknowledge and should then turn this field to `true`. | |
@@ -161,11 +161,13 @@ On Linux, install the udev rule first (README, *Linux: serial port permissions*)
    for i in range(30): s.write(b'{"type":"heartbeat","host_time":%d}\n' % (i * 1000)); time.sleep(1)
    EOF
    ```
-   - [ ] One corner LED is blue (0, 0, 128): that is the top-left of the picture. Note which way round the board is then (e.g. where the USB-C port is) and record it on this page, so "up" is known for rotation and #13.
+   - [x] One corner LED is blue (0, 0, 128): that is the top-left of the picture. Note which way round the board is then (e.g. where the USB-C port is) and record it on this page, so "up" is known for rotation and #13.
+     **Up is the USB-C edge:** with the port at the top, a picture shows upright (rotation 0).
+     Checked on 2026-10-16 with an 8×8 PNG through `codino show` rather than this fixture: pure blue at (0, 0), pure green along the rest of row 0, white at (0, 1), pure red elsewhere. Red and green came out as sent (so blue is the third channel), and the white LED sat next to the blue one. The gradient below is still to be seen.
    - [ ] Colors grow redder to the right and greener downwards, with the bottom-right LED whitish (224, 224, 128).
-   - [ ] No row runs backwards. If odd rows run backwards, `serpentine` is `true`.
-   - [ ] Red and green are not swapped. If they are, `color_order` is `"GRB"`.
-   - [ ] The picture isn't transposed. A transposed one means column wiring, which the Hardware Profile can't describe: report it.
+   - [x] No row runs backwards. If odd rows run backwards, `serpentine` is `true`.
+   - [x] Red and green are not swapped. If they are, `color_order` is `"GRB"`.
+   - [x] The picture isn't transposed. A transposed one means column wiring, which the Hardware Profile can't describe: report it.
    Fix the profile as described above if anything is off.
 5. **Ignoring another ESP32.** With the daemon running and the Device claimed, plug in another ESP32-S3 (or S2/C3) with native USB that runs other firmware (e.g. a Waveshare demo, or one in download mode).
    - [ ] The daemon tries it once, refuses it (no valid `hello_reply`) and leaves it alone: no reopening for `devicelink.RefusedRetry` (1 min) or until it is replugged.

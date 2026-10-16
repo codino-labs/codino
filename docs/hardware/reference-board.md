@@ -146,9 +146,9 @@ On Linux, install the udev rule first (README, *Linux: serial port permissions*)
    - [ ] Windows: a COM port named "Codino" (or "USB Serial Device") appears.
    - [ ] Nothing but protocol lines comes out of the port: no boot log.
 3. **Handshake and claim.** Run the daemon in the foreground with `./codino daemon` (no `--virtual-device`). From another terminal: `./codino event --session a --state awaiting_input --project .`.
-   - [ ] The daemon logs the claim of the board's port.
-   - [ ] `./codino status` shows `Device: <port> (firmware 0.1.0, protocol 0)`.
-   - [ ] The matrix pulses, then escalates (faster after 30 s, Takeover after 2 min).
+   - [x] The daemon logs the claim of the board's port.
+   - [x] `./codino status` shows `Device: <port> (firmware 0.1.0, protocol 0)`.
+   - [x] The matrix pulses, then escalates (faster after 30 s, Takeover after 2 min).
    - [ ] `./codino event --session a --end` darkens it.
    - [ ] Ctrl-C on the daemon sends `goodbye`: the matrix goes dark, not Disconnected.
 4. **Wiring and color order.** Show the Raw Mode fixture, a frame where the LED at (x, y) is R = 32x, G = 32y, B = 128:
@@ -175,9 +175,9 @@ On Linux, install the udev rule first (README, *Linux: serial port permissions*)
    - [ ] The Codino stays claimed.
    - [ ] With only the other board plugged in, nothing is claimed.
 6. **Replug recovery.** With a session Awaiting Input, unplug the Device.
-   - [ ] `codino status` shows no Device.
-   - [ ] Plug it back in: the Host claims it again within a few seconds.
-   - [ ] The session shows again, with Escalation counted from when it really started waiting.
+   - [x] `codino status` shows no Device.
+   - [x] Plug it back in: the Host claims it again within a few seconds.
+   - [x] The session shows again, with Escalation counted from when it really started waiting.
    - [ ] The same works on a different USB port.
 7. **Opening the port never resets the Device.** With the daemon stopped, run:
    ```sh
@@ -189,11 +189,11 @@ On Linux, install the udev rule first (README, *Linux: serial port permissions*)
    s.baudrate = 1200; time.sleep(0.2); s.close()
    EOF
    ```
-   - [ ] `lsusb` still shows `303a:0002`, not `303a:1001`.
-   - [ ] The matrix shows Disconnected, not a reboot.
-   - [ ] Start and stop the daemon ten times: the Device answers every handshake.
-8. **Flashing again.** Holding BOOT and pressing RESET enters download mode (`303a:1001`).
-   - [ ] `$ESPTOOL write_flash 0x10000 device/build/firmware/firmware.bin` then RESET boots the new firmware.
+   - [x] `lsusb` still shows `303a:0002`, not `303a:1001`.
+   - [x] The matrix shows Disconnected, not a reboot. (`lsusb` kept the same device number: no re-enumeration.)
+   - [x] Start and stop the daemon ten times: the Device answers every handshake.
+8. **Flashing again.** Holding BOOT and pressing RESET enters download mode (`303a:1001`). esptool's closing "Hard resetting via RTS pin" leaves the board in download mode (seen after `read_flash`, 2026-10-16): press RESET.
+   - [x] `$ESPTOOL write_flash 0x10000 device/build/firmware/firmware.bin` then RESET boots the new firmware.
    - [ ] It keeps the Hardware Profile, Preferences and Themes, since `write_flash` touches only the app.
 9. **Brightness and heat.**
    - [ ] Hold a Takeover (`codino event --session a --state awaiting_input`, wait 2 min) at `codino set brightness 100` for 10 minutes. The board stays comfortable to touch, under about 50 °C on an IR thermometer.
@@ -201,10 +201,10 @@ On Linux, install the udev rule first (README, *Linux: serial port permissions*)
    - [ ] `codino set brightness 10` visibly dims everything, and dim states stay lit.
    - [ ] If the board runs hot, lower `brightness_cap` (and the fixture) as described above.
 10. **Persistence across reboot.**
-    - [ ] `codino set brightness 20`, `codino set rotation 180`, then stop the daemon and press RESET. The Disconnected diagonal at boot is dim and turned before any Host connects.
-    - [ ] `codino theme install themes/examples/my-pack.json` and `codino theme install themes/examples/my-character.json`, then press RESET. `codino theme list` still shows them.
-    - [ ] After `codino theme uninstall`, press RESET: they stay gone.
-    - [ ] `$ESPTOOL read_flash 0x210000 0x1000 hw.bin; head -1 hw.bin` shows the reference profile line the first boot wrote.
+    - [x] `codino set brightness 20`, `codino set rotation 90`, then stop the daemon and press RESET. The Disconnected diagonal at boot is dim and runs from top-left to bottom-right before any Host connects. (Not 180: the diagonal turned 180° is the same line.)
+    - [x] `codino theme install themes/examples/my-pack.json` and `codino theme install themes/examples/my-character.json`, then press RESET. `codino theme list` still shows them.
+    - [x] After `codino theme uninstall`, press RESET: they stay gone.
+    - [x] `$ESPTOOL read_flash 0x210000 0x1000 hw.bin; head -1 hw.bin` shows the reference profile line the first boot wrote.
 11. **A custom Hardware Profile.** Write a profile with another data pin. Check that it is used, and that an invalid one falls back to the reference profile:
     ```sh
     printf '{"width":8,"height":8,"data_pin":14,"serpentine":true,"color_order":"GRB","brightness_cap":32,"current_cap_ma":300,"button":false,"imu":true}\n' > hw.json

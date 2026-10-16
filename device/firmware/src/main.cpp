@@ -153,6 +153,11 @@ void setup() {
   // download mode. To flash it again, hold BOOT and press RESET.
   usbSerial.enableReboot(false);
   usbSerial.begin();
+  // The board variant's USB_PID is 0x1001, the ROM's USB-Serial/JTAG in
+  // download mode: same VID, PID and serial number (the MAC) with other
+  // descriptors, which Windows caches per VID/PID/serial. The Arduino core's
+  // TinyUSB default (0x0002) tells the running Device apart.
+  USB.PID(0x0002);
   USB.begin();
 }
 

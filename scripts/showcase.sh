@@ -302,7 +302,7 @@ while ! claimed; do
 done
 codino status
 if [[ -f "$CONFIG" ]]; then cp "$CONFIG" "$WORK/config.toml"; HAD_CONFIG=1; fi
-for k in theme brightness layout rotation quiet_mode done_decay escalation.faster escalation.takeover escalation.steady; do
+for k in theme brightness layout rotation quiet_mode done_decay escalation.steady escalation.takeover escalation.faster; do
   "$CODINO" unset "$k" >/dev/null 2>&1 || true
 done
 note "Preferences at their defaults; yours are saved in $WORK."
@@ -340,7 +340,8 @@ look "It settled into a steady glow."
 ev a --acknowledge
 look "Acknowledged (as a typed prompt would): back to the gentle pulse; Escalation starts over."
 end a
-for k in escalation.faster escalation.takeover escalation.steady; do codino unset "$k"; done
+# Longest first: the steps must stay in order (faster ≤ takeover ≤ steady) after each unset.
+for k in escalation.steady escalation.takeover escalation.faster; do codino unset "$k"; done
 
 # ── 4 ─────────────────────────────────────────────────────────────────────
 stage "Adaptive Layout and Project Colors"

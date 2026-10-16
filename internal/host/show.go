@@ -98,25 +98,56 @@ func (s *Showing) framesFor(size matrixSize) []picture.Frame {
 func (h *Host) prepareShow(dev *devicelink.Device) {
 	h.mu.Lock()
 	s := h.showing
-	rotation := h.prefs.Rotation
+	rotation := effectiveRotation(h.prefs.Rotation, orientationOf(dev))
 	h.unlock()
 	if size, ok := matrixOf(dev, rotation); s != nil && ok {
 		s.framesFor(size)
 	}
 }
 
-// prepareRotatedShow renders the show for the claimed Device turned by
-// rotation, so a rotation Preference that turns the matrix sideways doesn't
-// scale the picture under h.mu.
-func (h *Host) prepareRotatedShow(rotation int) {
+// prepareRotatedShow renders the show for the claimed Device turned by the
+// rotation Preference `preference`, so a rotation that turns the matrix
+// sideways doesn't scale the picture under h.mu.
+func (h *Host) prepareRotatedShow(preference int) {
 	h.mu.Lock()
 	s, dev := h.showing, h.device
+	rotation := effectiveRotation(preference, h.orientation)
 	h.unlock()
 	if s == nil || dev == nil {
 		return
 	}
 	if size, ok := matrixOf(dev, rotation); ok {
 		s.framesFor(size)
+	}
+}
+
+// orient applies the orientation the claimed Device's IMU now senses: under
+// auto rotation, a show turned sideways by it is scaled to the turned matrix
+// (ahead of h.mu) and its frame sent again.
+func (h *Host) orient(dev *devicelink.Device, orientation int) {
+	h.mu.Lock()
+	s, rotation := h.showing, effectiveRotation(h.prefs.Rotation, orientation)
+	h.unlock()
+	if size, ok := matrixOf(dev, rotation); s != nil && ok {
+		s.framesFor(size)
+	}
+	h.mu.Lock()
+	defer h.unlock()
+	if h.device != dev {
+		return
+	}
+	turnedFrom := h.rotation()
+	h.orientation = orientation
+	h.resendTurnedShow(turnedFrom)
+}
+
+// resendTurnedShow sends the show's frame again, scaled to the turned
+// matrix, when the Device's rotation turned the matrix sideways or back from
+// turnedFrom. Callers hold h.mu.
+func (h *Host) resendTurnedShow(turnedFrom int) {
+	if sideways(turnedFrom) != sideways(h.rotation()) {
+		h.shownFrame = -1
+		h.sendShowFrame()
 	}
 }
 
@@ -134,14 +165,15 @@ func (h *Host) matrix() (matrixSize, bool) {
 		if len(h.watchers) == 0 {
 			return matrixSize{}, false
 		}
-		return matrixOfProfile(PreviewProfile, h.prefs.Rotation)
+		// The preview's own Device senses nothing: auto leaves it unturned.
+		return matrixOfProfile(PreviewProfile, effectiveRotation(h.prefs.Rotation, 0))
 	}
-	return matrixOf(h.device, h.prefs.Rotation)
+	return matrixOf(h.device, h.rotation())
 }
 
 // matrixOf is a Device's matrix size, from its Hardware Profile, as the
-// picture is seen on it: turned sideways by the rotation Preference, width
-// and height swap.
+// picture is seen on it: turned sideways by its rotation, width and height
+// swap.
 func matrixOf(dev *devicelink.Device, rotation int) (matrixSize, bool) {
 	return matrixOfProfile(dev.HelloReply.HardwareProfile, rotation)
 }

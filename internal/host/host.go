@@ -34,6 +34,9 @@ type Host struct {
 	mu       sync.Mutex
 	sessions *tracker
 	device   *devicelink.Device
+	// orientation is the rotation the claimed Device's IMU senses (its
+	// hello_reply, then its orientation messages): 0 without one.
+	orientation int
 	// dropped are Devices to close once mu is released: closing a hung
 	// Device can block for a second, which must not stall events.
 	dropped []*devicelink.Device
@@ -412,6 +415,7 @@ func (h *Host) claim() {
 	}
 	slog.Info("Device claimed", "device", dev.Name, "firmware", dev.HelloReply.Firmware)
 	h.device = dev
+	h.orientation = orientationOf(dev)
 	h.onDevice = installedOnDevice(dev)
 	h.deviceProblem, h.deviceUpdateURL = "", ""
 	h.lastFailedClaim = time.Time{}
@@ -456,6 +460,8 @@ func (h *Host) listen(dev *devicelink.Device) {
 		select {
 		case <-dev.Acknowledged():
 			h.acknowledgeAll()
+		case orientation := <-dev.Orientations():
+			h.orient(dev, orientation)
 		case <-dev.Gone():
 			return
 		}
@@ -531,6 +537,7 @@ func (h *Host) dropGoneDevice() {
 func (h *Host) drop() {
 	h.dropped = append(h.dropped, h.device)
 	h.device = nil
+	h.orientation = 0
 }
 
 // unlock releases h.mu, then closes the Devices dropped while it was held.

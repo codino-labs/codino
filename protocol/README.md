@@ -2,7 +2,7 @@
 
 The wire protocol between the Host Daemon and a Device (or a Virtual Device). It is semantic (ADR-0001): the Host says what state each Agent Session is in, and the Device decides how that looks.
 
-v0 covers the handshake, session upsert, session remove, heartbeat, acknowledge, Disconnected, goodbye, Raw Mode, the preview-state override, the Preferences push and installing Themes and Sprite Packs. The Theme and Sprite Pack format is in [themes.md](themes.md).
+v0 covers the handshake, session upsert, session remove, heartbeat, acknowledge, orientation, Disconnected, goodbye, Raw Mode, the preview-state override, the Preferences push and installing Themes and Sprite Packs. The Theme and Sprite Pack format is in [themes.md](themes.md).
 
 ## Framing
 
@@ -38,6 +38,7 @@ A `hello` starts a new link: the Device forgets every Agent Session it holds (it
 | `hardware_profile` | object | The Device's Hardware Profile, below. |
 | `themes` | array of strings | The Themes the Device has: its built-in ones first, then the installed ones (Themes and Sprite Packs, below). |
 | `sprite_packs` | array of strings | The Sprite Packs it has, likewise. |
+| `orientation` | integer | Only from a Device with an IMU: the rotation it senses (Orientation, below). |
 
 Hardware Profile fields:
 
@@ -113,6 +114,18 @@ The Host tells the Device when the human Acknowledged one waiting session elsewh
 
 A Device needs nothing but the `type`: without `id` the Acknowledge is for every session, and without `host_time` it happened now. An `id` that is present but not a non-empty string makes the message ignored.
 
+## Orientation (Device → Host)
+
+A Device with an IMU senses which way up it stands. Under the `rotation` Preference `auto` (the default) it turns the picture by that rotation, so the picture stays upright however the Device is mounted; a rotation in degrees overrides it. A Device without an IMU senses nothing: `auto` is 0 there.
+
+### `orientation`
+
+Sent when the rotation the Device senses changes (it was turned and has stood the new way for a moment), whatever the `rotation` Preference; its `hello_reply` carries the current one. The Host needs it under `auto`, to scale Raw Mode pictures to the matrix as it is turned (Raw Mode, below), and shows it in `codino status`. It sends nothing back.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `rotation` | integer | `0`, `90`, `180` or `270`: degrees clockwise the picture turns to show upright. A Host ignores any other value. |
+
 ## Escalation and Done decay
 
 Escalation is the Device's (ADR-0001): it renders it from `state_entered`, the latest `acknowledge` and its own clock, relating Host times to its clock through the `host_time` of `hello` and `heartbeat`. A Host time after the Device's estimate of now counts as now. The thresholds are Preferences (below); by default: a gentle pulse for 30 s, faster and brighter until 2 min, a Takeover of the whole matrix in the waiting session's `project_color` until 10 min (cycling between the Project Colors of every session in Takeover, one a second), then a steady glow. Where the whole matrix shows the Aggregate State (below), it shows the most insistent step any Awaiting Input session has reached; a Tile shows its own session's step: Takeover, faster, gentle, steady glow (a session that has just started to wait outranks one that settled).
@@ -155,7 +168,7 @@ The pixels of one frame, as one line of bytes:
 | 3 × width × height | One LED after another, row-major from the top-left of the logical matrix (the Device maps it to its wiring, serpentine and color order), each as R, G, B, 0–255. No byte is `0x0A`: the Host sends 11 for a channel at 10, an invisible difference. |
 | 1 | `0x0A` (`\n`). |
 
-The length is not sent: width and height are the Device's, from the `hardware_profile` of its `hello_reply`, swapped while the `rotation` Preference is 90 or 270 (the picture is seen turned sideways), and the Host scales every picture to them. The Device turns the frame by the rotation and scales it under its brightness cap like everything it shows. A Device uses a frame only in Raw Mode and only when it holds exactly `1 + 3 × width × height` bytes before the newline; it ignores any other frame as a whole, like an unusable JSON message. Transports must pass a frame's bytes unchanged: a trailing `\r` is not stripped from a frame.
+The length is not sent: width and height are the Device's, from the `hardware_profile` of its `hello_reply`, swapped while the Device turns the picture by 90 or 270 (the `rotation` Preference, or under `"auto"` the latest `orientation`: the picture is seen turned sideways), and the Host scales every picture to them. The Device turns the frame by the rotation and scales it under its brightness cap like everything it shows. A Device uses a frame only in Raw Mode and only when it holds exactly `1 + 3 × width × height` bytes before the newline; it ignores any other frame as a whole, like an unusable JSON message. Transports must pass a frame's bytes unchanged: a trailing `\r` is not stripped from a frame.
 
 Why one line: because no pixel byte is a newline, a frame is framed like any JSON message, and every receiver resynchronises the same way: at the next `\n`. A frame cut short (a Host that died mid-frame) runs into the next line and is ignored for its wrong length, losing that line too (should the two add up to a frame's length exactly, they show as noise until the next frame); the Host's next message, at the latest its next heartbeat a second later, arrives whole.
 
@@ -239,12 +252,12 @@ Sent after `hello_reply`, before the `session_upsert`s, on every claim, and agai
 | `theme` | string | The name of the Theme to render by: 1–32 of `a-z`, `0-9`, `-`, `_`. A Theme the Device doesn't have shows as `default`; the Device keeps the name, so the Theme shows once it is installed. |
 | `brightness` | integer 1–100 | Percent of the Hardware Profile's `brightness_cap`. |
 | `layout` | string | `adaptive` or `aggregate` (Layout and Tiles, above). |
-| `rotation` | integer | `0`, `90`, `180` or `270`: degrees the picture is turned clockwise on the matrix. |
+| `rotation` | integer or string | `0`, `90`, `180` or `270`: degrees the picture is turned clockwise on the matrix. `"auto"`: the rotation the Device's IMU senses (Orientation, above), 0 without an IMU. The Host leaves the field out for auto, the default, so a firmware older than auto rotation takes 0 (what auto means without an IMU) rather than refusing the whole push. |
 | `quiet_mode` | bool | Show nothing but Awaiting Input (Rendering, above). |
 | `disconnected_timeout_ms` | integer ≥ 1000 | Host silence before Disconnected. The Host's config file takes 2 s at least, so one late heartbeat never shows Disconnected; the Device accepts any timeout a heartbeat a second keeps away. |
 | `escalation_faster_ms`, `escalation_takeover_ms`, `escalation_steady_ms` | integer | When each Escalation step starts (Escalation, above), in order: faster ≤ takeover ≤ steady (two at the same time skip the first of them). |
 
-A push is the whole set: a field the Device doesn't find takes the Device's default (`default`, 100, `adaptive`, 0, `false`, 5000, 30000, 120000, 600000, as the Host's defaults), not its previous value. A field present with an invalid value makes the Device ignore the whole message, which then doesn't count as hearing from the Host either.
+A push is the whole set: a field the Device doesn't find takes the Device's default (`default`, 100, `adaptive`, `"auto"`, `false`, 5000, 30000, 120000, 600000, as the Host's defaults), not its previous value. A field present with an invalid value makes the Device ignore the whole message, which then doesn't count as hearing from the Host either.
 
 - **Brightness.** Every LED channel the Device shows (Session States, Escalation's steps, Takeover, Disconnected, Raw Mode frames) is scaled to `brightness_cap × brightness / 100` of full; a lit channel stays at least 1, so dim patterns never go dark on a dim Device. Whatever the Preferences say, nothing exceeds the cap.
 - **Rotation.** The Device lays the picture out in the turned shape (a 16×8 matrix turned by 90 shows an 8×16 picture) and turns it onto the LEDs, Raw Mode frames included.

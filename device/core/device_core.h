@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <array>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -79,8 +80,9 @@ struct Preferences {
   uint8_t brightness = 100;
   Layout layout = Layout::Adaptive;
   // Degrees (0, 90, 180, 270) the picture is turned clockwise on the matrix,
-  // for a Device mounted another way round.
-  uint16_t rotation = 0;
+  // for a Device mounted another way round. None is auto: the rotation an
+  // IMU senses (DeviceCore::orient), or 0 without an IMU.
+  std::optional<uint16_t> rotation;
   // Shows nothing but Awaiting Input, Escalation and Takeover included.
   bool quietMode = false;
   // How long the Host may stay silent before the Device shows Disconnected.
@@ -167,6 +169,15 @@ class DeviceCore {
   // the Host: none while the Device shows "update me".
   std::string acknowledge();
 
+  // The IMU senses the Device's Orientation: the picture is upright when
+  // turned `degrees` (0, 90, 180 or 270) clockwise. Under auto rotation the
+  // picture turns by it. Returns the `orientation` line to send to the Host
+  // when it changed: none while the Device shows "update me".
+  std::string orient(uint16_t degrees);
+  // The degrees the picture is turned by: the rotation Preference, or under
+  // auto the sensed rotation of a Device with an IMU (else 0).
+  uint16_t rotation() const;
+
   // Renders the frame for the current clock time.
   const PixelBuffer& render();
 
@@ -203,6 +214,10 @@ class DeviceCore {
 
   // Renders by `preferences` from now on, and caches them when they changed.
   void applyPreferences(const Preferences& preferences);
+  // After the rotation changed from `before`: when the picture's width and
+  // height swapped, the frames take the turned shape (Raw Mode's pixels no
+  // longer fit).
+  void reshape(uint16_t before);
   // Turns the logical frame by the rotation and scales it under the
   // brightness cap into what the LEDs show.
   const PixelBuffer& present();
@@ -227,6 +242,8 @@ class DeviceCore {
   // the abstract Theme's for a pose.
   void drawState(Region region, SessionState state, Rgb color, bool wholeMatrix);
   Preferences preferences_;
+  // The Orientation the IMU senses (orient).
+  uint16_t orientation_ = 0;
   // The frame being rendered, in the orientation the picture is seen in
   // (width and height swapped when turned by 90 or 270 degrees), and the
   // frame the LEDs show.

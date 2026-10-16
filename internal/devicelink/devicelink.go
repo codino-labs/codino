@@ -88,6 +88,7 @@ type Device struct {
 	gone         chan struct{}
 	once         sync.Once
 	acknowledged chan struct{}
+	orientations chan int
 	installed    chan protocol.InstallReply
 }
 
@@ -184,7 +185,7 @@ func handshake(c Candidate, port io.ReadWriteCloser, now time.Time) (*Device, er
 	}
 
 	dev := &Device{Name: c.Name, HelloReply: reply, port: port, gone: make(chan struct{}), acknowledged: make(chan struct{}, 1),
-		installed: make(chan protocol.InstallReply, installRepliesQueued)}
+		orientations: make(chan int, 1), installed: make(chan protocol.InstallReply, installRepliesQueued)}
 	go dev.drain(lines)
 	return dev, nil
 }
@@ -204,6 +205,14 @@ func (d *Device) drain(lines *bufio.Reader) {
 			default: // one is pending already: Acknowledging twice is once
 			}
 		}
+		if rotation, ok := protocol.DecodeOrientation(line); ok {
+			// Only the latest counts: one not received yet is replaced.
+			select {
+			case <-d.orientations:
+			default:
+			}
+			d.orientations <- rotation
+		}
 		if reply, err := protocol.DecodeInstallReply(line); err == nil {
 			select {
 			case d.installed <- reply:
@@ -216,6 +225,11 @@ func (d *Device) drain(lines *bufio.Reader) {
 // Acknowledged receives once the human Acknowledges on the Device (a button
 // press or a double tap), for every session.
 func (d *Device) Acknowledged() <-chan struct{} { return d.acknowledged }
+
+// Orientations receives the rotation the Device's IMU senses whenever it
+// changes (the Device turned another way up): only the latest when several
+// came meanwhile.
+func (d *Device) Orientations() <-chan int { return d.orientations }
 
 // installRepliesQueued is how many install replies wait to be received:
 // the answer to an install, and late answers to earlier ones.

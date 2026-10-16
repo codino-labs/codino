@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"maps"
 
+	"github.com/codino-labs/codino/internal/devicelink"
 	"github.com/codino-labs/codino/internal/preferences"
 	"github.com/codino-labs/codino/internal/protocol"
 )
@@ -45,15 +46,11 @@ func (h *Host) reloadPreferences() {
 // by changed, and running sessions of a project whose pinned Project Color
 // changed take it. Callers hold h.mu.
 func (h *Host) setPreferences(p preferences.Preferences) {
-	old := h.prefs
+	old, turnedFrom := h.prefs, h.rotation()
 	h.prefs = p
 	if preferencesPush(old) != preferencesPush(p) {
 		h.send(preferencesPush(p))
-		if sideways(old.Rotation) != sideways(p.Rotation) {
-			// The show, scaled to the turned matrix by prepareRotatedShow.
-			h.shownFrame = -1
-			h.sendShowFrame()
-		}
+		h.resendTurnedShow(turnedFrom) // scaled to the turned matrix by prepareRotatedShow
 	}
 	if !maps.Equal(old.ProjectColors, p.ProjectColors) {
 		for _, s := range h.sessions.pin(p.ProjectColors) {
@@ -68,13 +65,43 @@ func preferencesPush(p preferences.Preferences) protocol.Preferences {
 		Theme:                 p.Theme,
 		Brightness:            p.Brightness,
 		Layout:                string(p.Layout),
-		Rotation:              p.Rotation,
+		Rotation:              pushedRotation(p.Rotation),
 		QuietMode:             p.QuietMode,
 		DisconnectedTimeoutMS: p.DisconnectedTimeout.Milliseconds(),
 		EscalationFasterMS:    p.Escalation.Faster.Milliseconds(),
 		EscalationTakeoverMS:  p.Escalation.Takeover.Milliseconds(),
 		EscalationSteadyMS:    p.Escalation.Steady.Milliseconds(),
 	})
+}
+
+// pushedRotation is the rotation Preference as the push carries it.
+func pushedRotation(rotation int) protocol.Rotation {
+	if rotation == preferences.AutoRotation {
+		return protocol.AutoRotation
+	}
+	return protocol.Rotation(rotation)
+}
+
+// rotation is the rotation the claimed Device turns the picture by. Callers
+// hold h.mu.
+func (h *Host) rotation() int { return effectiveRotation(h.prefs.Rotation, h.orientation) }
+
+// effectiveRotation is the rotation a Device turns the picture by: the
+// rotation Preference, or under auto the orientation its IMU senses.
+func effectiveRotation(preference, orientation int) int {
+	if preference == preferences.AutoRotation {
+		return orientation
+	}
+	return preference
+}
+
+// orientationOf is the orientation a Device said in its hello_reply: 0
+// without an IMU.
+func orientationOf(dev *devicelink.Device) int {
+	if o := dev.HelloReply.Orientation; o != nil {
+		return *o
+	}
+	return 0
 }
 
 // sideways reports whether a rotation swaps the matrix's width and height.

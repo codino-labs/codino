@@ -72,7 +72,7 @@ func fixturePreferences(p *preferences.Preferences) {
 }
 
 // defaultPreferences is the push of the default Preferences.
-const defaultPreferences = `{"type":"preferences","theme":"default","brightness":100,"layout":"adaptive","rotation":0,"quiet_mode":false,"disconnected_timeout_ms":5000,"escalation_faster_ms":30000,"escalation_takeover_ms":120000,"escalation_steady_ms":600000}`
+const defaultPreferences = `{"type":"preferences","theme":"default","brightness":100,"layout":"adaptive","quiet_mode":false,"disconnected_timeout_ms":5000,"escalation_faster_ms":30000,"escalation_takeover_ms":120000,"escalation_steady_ms":600000}`
 
 // preferencesPushes returns the preferences messages among lines.
 func preferencesPushes(lines []string) []string {
@@ -255,5 +255,77 @@ func TestTurnedSidewaysAPictureIsScaledToTheTurnedMatrix(t *testing.T) {
 	frame := frames[len(frames)-1]
 	if len(frame) != 1+2*4*3 {
 		t.Errorf("frame of %d bytes, want %d", len(frame), 1+2*4*3)
+	}
+}
+
+// helloReplyWith is the hello_reply fixture with each old, new pair of
+// strings replaced.
+func helloReplyWith(t *testing.T, oldNew ...string) string {
+	t.Helper()
+	return strings.NewReplacer(oldNew...).Replace(fixture(t, "hello-reply.jsonl"))
+}
+
+// lastFrameOn is the last Raw Mode frame a Device of 4 x 2 LEDs, whose
+// hello_reply ends with `orientation`, gets when the rotation Preference is
+// `rotation` and the Host shows the fixture picture.
+func lastFrameOn(t *testing.T, rotation int, orientation string) string {
+	t.Helper()
+	wide := newFakeDevice(helloReplyWith(t, `"width":8`, `"width":4`, `"height":8`, `"height":2`, `"orientation":0`, orientation))
+	h := host.New(clockAt(1760432400000), devices(wide), withPreferences(func(p *preferences.Preferences) { p.Rotation = rotation }))
+	defer h.Close()
+	h.Tick()
+	show(t, h, decode(t, encodePNG(t, rawFixtureImage())))
+	frames := since(wide, 2)
+	return frames[len(frames)-1]
+}
+
+func TestUnderAutoRotationAPictureIsScaledToTheOrientationTheDeviceReports(t *testing.T) {
+	turned := lastFrameOn(t, 90, `"orientation":0`)
+	if upright := lastFrameOn(t, 0, `"orientation":0`); upright == turned {
+		t.Fatal("the fixture picture looks the same turned: it can't tell rotations apart")
+	}
+
+	if got := lastFrameOn(t, preferences.AutoRotation, `"orientation":90`); got != turned {
+		t.Errorf("frame %q, want the one turned by 90 %q", got, turned)
+	}
+}
+
+func TestUnderAutoRotationTurningTheDeviceSidewaysRescalesThePicture(t *testing.T) {
+	turned := lastFrameOn(t, 90, `"orientation":0`)
+	wide := newFakeDevice(helloReplyWith(t, `"width":8`, `"width":4`, `"height":8`, `"height":2`))
+	h := host.New(clockAt(1760432400000), devices(wide))
+	defer h.Close()
+	h.Tick()
+	show(t, h, decode(t, encodePNG(t, rawFixtureImage())))
+	sent := len(wide.Received())
+
+	wide.toHost <- []byte(fixture(t, "orientation.jsonl") + "\n")
+
+	waitFor(t, func() bool { return len(wide.Received()) > sent })
+	frames := since(wide, sent)
+	if got := frames[len(frames)-1]; got != turned {
+		t.Errorf("frame %q, want the one turned by 90 %q", got, turned)
+	}
+}
+
+func TestTheStatusSaysWhichWayUpTheDeviceStands(t *testing.T) {
+	h, dev, _ := claimedHost(t)
+	if o := h.Status().Device.Orientation; o == nil || *o != 0 {
+		t.Fatalf("orientation %v after the hello_reply, want 0", o)
+	}
+
+	dev.toHost <- []byte(fixture(t, "orientation.jsonl") + "\n")
+
+	waitFor(t, func() bool { o := h.Status().Device.Orientation; return o != nil && *o == 90 })
+}
+
+func TestTheStatusOfADeviceWithoutAnIMUHasNoOrientation(t *testing.T) {
+	plain := newFakeDevice(helloReplyWith(t, `"imu":true`, `"imu":false`, `,"orientation":0`, ""))
+	h := host.New(clockAt(1760432400000), devices(plain))
+	defer h.Close()
+	h.Tick()
+
+	if o := h.Status().Device.Orientation; o != nil {
+		t.Errorf("orientation %d", *o)
 	}
 }

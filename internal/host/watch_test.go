@@ -52,7 +52,7 @@ func watch(t *testing.T, h *host.Host) *host.Watcher {
 
 // referenceProfile is the Hardware Profile of hello-reply.jsonl.
 var referenceProfile = protocol.HardwareProfile{Width: 8, Height: 8, DataPin: 14, ColorOrder: "RGB",
-	BrightnessCap: 48, CurrentCapMA: 300, IMU: true}
+	BrightnessCap: 48, CurrentCapMA: 300, Button: true, IMU: true}
 
 func TestAWatcherStartsLikeTheClaimedDeviceThenGetsWhatItIsSent(t *testing.T) {
 	h, dev, clock := claimedHost(t)

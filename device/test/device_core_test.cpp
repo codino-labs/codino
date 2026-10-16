@@ -157,7 +157,7 @@ TEST_CASE("hello gets a reply with protocol version, firmware version and Hardwa
   reference.colorOrder = "RGB";
   reference.brightnessCap = 48;
   reference.currentCapMa = 300;
-  reference.button = false;
+  reference.button = true;
   reference.imu = true;
   FakeClock clock;
   device::DeviceCore core(reference, "0.1.0", clock, abstractTheme());
@@ -1265,7 +1265,7 @@ TEST_CASE_FIXTURE(AggregateDevice8x8, "a field missing from a Preferences push t
 
   const auto& prefs = core.preferences();
   CHECK(prefs.brightness == 100);
-  CHECK(prefs.rotation == 0);
+  CHECK_FALSE(prefs.rotation.has_value());  // auto
   CHECK(prefs.quietMode);
   CHECK(prefs.layout == device::Layout::Aggregate);  // the default this Device was built with
 }
@@ -1280,6 +1280,7 @@ TEST_CASE("a Preferences push with any invalid field is ignored as a whole") {
       R"("layout":1)",
       R"("rotation":45)",
       R"("rotation":-90)",
+      R"("rotation":"sideways")",
       R"("quiet_mode":"yes")",
       R"("theme":"")",
       R"("theme":7)",
@@ -1458,6 +1459,74 @@ TEST_CASE("turned sideways, a matrix that isn't square lays the picture out in t
   CHECK(frame.height() == 4);
   CHECK(isFilled(frame, {0, 0, 8, 2}, kPink));
   CHECK(isFilled(frame, {0, 2, 8, 4}, kGreen));
+}
+
+// A Device with an IMU, whose firmware reports the rotation it senses.
+device::HardwareProfile imuProfile8x8() {
+  device::HardwareProfile p = profile8x8();
+  p.imu = true;
+  return p;
+}
+
+TEST_CASE("under auto rotation an IMU Device turns the picture by the rotation it senses") {
+  FakeClock clock;
+  device::DeviceCore core(imuProfile8x8(), "0.1.0", clock, abstractTheme());
+  core.receive(preferences(R"("rotation":"auto")"));
+  core.receive(upsertTile("a", "done", "#ff3da5", 0));
+  core.receive(upsertTile("b", "done", "#2ad14f", 1));
+
+  core.orient(180);
+
+  CHECK(isFilled(core.render(), kRight, kPink));
+}
+
+TEST_CASE("a rotation Preference overrides the rotation the IMU senses") {
+  FakeClock clock;
+  device::DeviceCore core(imuProfile8x8(), "0.1.0", clock, abstractTheme());
+  core.receive(preferences(R"("rotation":0)"));
+  core.receive(upsertTile("a", "done", "#ff3da5", 0));
+  core.receive(upsertTile("b", "done", "#2ad14f", 1));
+
+  core.orient(180);
+
+  CHECK(isFilled(core.render(), kLeft, kPink));
+}
+
+TEST_CASE_FIXTURE(Device8x8, "under auto rotation a Device without an IMU stays unturned") {
+  core.receive(upsertTile("a", "done", "#ff3da5", 0));
+  core.receive(upsertTile("b", "done", "#2ad14f", 1));
+
+  core.orient(180);
+
+  CHECK(isFilled(core.render(), kLeft, kPink));
+}
+
+TEST_CASE("an IMU Device tells the Host the rotation it senses when it changes") {
+  FakeClock clock;
+  device::DeviceCore core(imuProfile8x8(), "0.1.0", clock, abstractTheme());
+
+  const std::string toHost = core.orient(90);
+
+  JsonDocument actual, expected;
+  REQUIRE_FALSE(deserializeJson(actual, toHost));
+  REQUIRE_FALSE(deserializeJson(expected, fixture("orientation.jsonl")));
+  CHECK_MESSAGE(actual == expected, "sent: " << toHost);
+  CHECK(core.orient(90).empty());
+  CHECK(core.orient(0) == R"({"type":"orientation","rotation":0})");
+}
+
+TEST_CASE("an IMU Device's hello_reply says the rotation it senses; one without an IMU's doesn't") {
+  FakeClock clock;
+  device::DeviceCore imu(imuProfile8x8(), "0.1.0", clock, abstractTheme());
+  device::DeviceCore plain(profile8x8(), "0.1.0", clock, abstractTheme());
+  imu.orient(270);
+
+  JsonDocument withImu, without;
+  REQUIRE_FALSE(deserializeJson(withImu, imu.receive(fixture("hello.jsonl"))));
+  REQUIRE_FALSE(deserializeJson(without, plain.receive(fixture("hello.jsonl"))));
+
+  CHECK(withImu["orientation"] == 270);
+  CHECK(without["orientation"].isNull());
 }
 
 TEST_CASE_FIXTURE(Device8x8, "a Raw Mode frame turns with the rotation too") {

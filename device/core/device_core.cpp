@@ -57,6 +57,9 @@ struct LayoutName {
   Layout layout;
   const char* wireName;
 };
+// The rotation Preference's wire value for auto rotation.
+constexpr const char* kAutoRotation = "auto";
+
 constexpr LayoutName kLayouts[] = {{Layout::Adaptive, "adaptive"}, {Layout::Aggregate, "aggregate"}};
 
 // The shortest Disconnected timeout: the Host sends a heartbeat every second.
@@ -88,7 +91,9 @@ bool parsePreferences(JsonVariantConst message, const Preferences& defaults, Pre
     p.layout = found->layout;
   }
   JsonVariantConst rotation = message["rotation"];
-  if (!rotation.isNull()) {
+  if (rotation.is<const char*>() && std::string_view(rotation.as<const char*>()) == kAutoRotation) {
+    p.rotation.reset();
+  } else if (!rotation.isNull()) {
     if (!rotation.is<int>()) return false;
     const int degrees = rotation.as<int>();
     if (degrees != 0 && degrees != 90 && degrees != 180 && degrees != 270) return false;
@@ -153,10 +158,33 @@ DeviceCore::DeviceCore(HardwareProfile profile, std::string firmwareVersion, con
   parseTheme(abstract.as<JsonVariantConst>(), abstract_, error);
   selectTheme();
   // Defaults that would be refused on the wire are kept as given.
-  if (turnsSideways(preferences_.rotation)) {
-    frame_ = PixelBuffer(profile_.height, profile_.width);
-    raw_ = PixelBuffer(profile_.height, profile_.width);
-  }
+  reshape(0);
+}
+
+uint16_t DeviceCore::rotation() const {
+  if (preferences_.rotation) return *preferences_.rotation;
+  return profile_.imu ? orientation_ : 0;
+}
+
+void DeviceCore::reshape(uint16_t before) {
+  if (turnsSideways(rotation()) == turnsSideways(before)) return;
+  frame_ = PixelBuffer(frame_.height(), frame_.width());
+  raw_ = PixelBuffer(raw_.height(), raw_.width());
+}
+
+std::string DeviceCore::orient(uint16_t degrees) {
+  if (!profile_.imu || degrees == orientation_) return {};
+  if (degrees != 0 && degrees != 90 && degrees != 180 && degrees != 270) return {};
+  const uint16_t before = rotation();
+  orientation_ = degrees;
+  reshape(before);
+  if (updateWanted_) return {};
+  JsonDocument message;
+  message["type"] = "orientation";
+  message["rotation"] = orientation_;
+  std::string line;
+  serializeJson(message, line);
+  return line;
 }
 
 std::string DeviceCore::preferencesLine() const {
@@ -166,7 +194,11 @@ std::string DeviceCore::preferencesLine() const {
   message["brightness"] = preferences_.brightness;
   for (const auto& l : kLayouts)
     if (l.layout == preferences_.layout) message["layout"] = l.wireName;
-  message["rotation"] = preferences_.rotation;
+  if (preferences_.rotation) {
+    message["rotation"] = *preferences_.rotation;
+  } else {
+    message["rotation"] = kAutoRotation;
+  }
   message["quiet_mode"] = preferences_.quietMode;
   message["disconnected_timeout_ms"] = preferences_.disconnectedTimeoutMs;
   message["escalation_faster_ms"] = preferences_.escalation.fasterFromMs;
@@ -179,15 +211,11 @@ std::string DeviceCore::preferencesLine() const {
 
 void DeviceCore::applyPreferences(const Preferences& preferences) {
   const std::string before = preferencesLine();
-  const bool wasSideways = turnsSideways(preferences_.rotation);
+  const uint16_t rotationBefore = rotation();
   const bool themeChanged = preferences.theme != preferences_.theme;
   preferences_ = preferences;
   if (themeChanged) selectTheme();
-  if (turnsSideways(preferences_.rotation) != wasSideways) {
-    // The picture's width and height swap: Raw Mode's pixels no longer fit.
-    frame_ = PixelBuffer(frame_.height(), frame_.width());
-    raw_ = PixelBuffer(raw_.height(), raw_.width());
-  }
+  reshape(rotationBefore);
   const std::string after = preferencesLine();
   // Only a change is saved: flash wears with every write.
   if (cache_ != nullptr && after != before) cache_->save(after);
@@ -331,6 +359,7 @@ std::string DeviceCore::helloReply() const {
   hw["button"] = profile_.button;
   hw["imu"] = profile_.imu;
   addAvailable(reply);
+  if (profile_.imu) reply["orientation"] = orientation_;
   std::string line;
   serializeJson(reply, line);
   return line;
@@ -657,7 +686,7 @@ const PixelBuffer& DeviceCore::present() {
   for (int y = 0; y < frame_.height(); ++y) {
     for (int x = 0; x < frame_.width(); ++x) {
       int px = x, py = y;
-      switch (preferences_.rotation) {
+      switch (rotation()) {
         case 90: px = w - 1 - y; py = x; break;
         case 180: px = w - 1 - x; py = h - 1 - y; break;
         case 270: px = y; py = h - 1 - x; break;

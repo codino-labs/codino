@@ -67,6 +67,10 @@ _Avoid_: board, gadget, lamp
 The description of a physical build (matrix size, wiring, color order, brightness cap, available inputs). Stored on the Device and chosen when the firmware is flashed.
 _Avoid_: board config, device config
 
+**Orientation**:
+Which way up a Device with an IMU stands: the rotation that shows the picture upright. Under auto rotation (the default) the Device turns the picture by it; a rotation Preference in degrees overrides it.
+_Avoid_: tilt, attitude, auto-rotate state
+
 **Preferences**:
 The user's choices about how states look and behave (Theme, Layout, brightness, Quiet Mode…). Stored on the Host, which is canonical, and cached on the Device.
 _Avoid_: settings, config (ambiguous with Hardware Profile)

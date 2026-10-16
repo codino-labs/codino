@@ -43,6 +43,10 @@ type HelloReply struct {
 	// from a Device that predates Themes.
 	Themes      []string `json:"themes,omitempty"`
 	SpritePacks []string `json:"sprite_packs,omitempty"`
+	// Orientation is the rotation the Device's IMU senses (0, 90, 180 or
+	// 270): the one that shows the picture upright. Only from a Device with
+	// an IMU.
+	Orientation *int `json:"orientation,omitempty"`
 }
 
 // SessionUpsert creates or replaces one Agent Session on the Device.
@@ -84,15 +88,37 @@ type Preferences struct {
 	Theme string `json:"theme"`
 	// Brightness is a percentage (1-100) of the Hardware Profile's
 	// brightness cap.
-	Brightness int    `json:"brightness"`
-	Layout     string `json:"layout"`
-	// Rotation is 0, 90, 180 or 270 degrees clockwise.
-	Rotation              int   `json:"rotation"`
-	QuietMode             bool  `json:"quiet_mode"`
-	DisconnectedTimeoutMS int64 `json:"disconnected_timeout_ms"`
-	EscalationFasterMS    int64 `json:"escalation_faster_ms"`
-	EscalationTakeoverMS  int64 `json:"escalation_takeover_ms"`
-	EscalationSteadyMS    int64 `json:"escalation_steady_ms"`
+	Brightness            int      `json:"brightness"`
+	Layout                string   `json:"layout"`
+	Rotation              Rotation `json:"rotation"`
+	QuietMode             bool     `json:"quiet_mode"`
+	DisconnectedTimeoutMS int64    `json:"disconnected_timeout_ms"`
+	EscalationFasterMS    int64    `json:"escalation_faster_ms"`
+	EscalationTakeoverMS  int64    `json:"escalation_takeover_ms"`
+	EscalationSteadyMS    int64    `json:"escalation_steady_ms"`
+}
+
+// Rotation is 0, 90, 180 or 270 degrees clockwise, or AutoRotation.
+type Rotation int
+
+// AutoRotation turns the picture by the Orientation the Device's IMU senses
+// (none without an IMU). A push leaves `rotation` out for it: the Device's
+// default is auto, and a firmware older than auto rotation takes 0, which
+// is what auto means without an IMU, rather than refusing the push.
+const AutoRotation Rotation = -1
+
+// MarshalJSON leaves `rotation` out under AutoRotation.
+func (p Preferences) MarshalJSON() ([]byte, error) {
+	type plain Preferences // without this method
+	wire := struct {
+		plain
+		Rotation *int `json:"rotation,omitempty"`
+	}{plain: plain(p)}
+	if p.Rotation != AutoRotation {
+		degrees := int(p.Rotation)
+		wire.Rotation = &degrees
+	}
+	return json.Marshal(wire)
 }
 
 // RawModeEnter puts the Device in Raw Mode: it shows the RawFrames that
@@ -215,6 +241,23 @@ func IsAcknowledge(line []byte) bool {
 	return json.Unmarshal(line, &m) == nil && m.Type == "acknowledge"
 }
 
+// DecodeOrientation reads an orientation line (Device → Host): the rotation
+// the Device's IMU now senses. False for any other line, or a rotation that
+// isn't a quarter turn.
+func DecodeOrientation(line []byte) (rotation int, ok bool) {
+	var m struct {
+		Type     string `json:"type"`
+		Rotation *int   `json:"rotation"`
+	}
+	if json.Unmarshal(line, &m) != nil || m.Type != "orientation" {
+		return 0, false
+	}
+	if r := quarterTurn(m.Rotation); r != nil {
+		return *r, true
+	}
+	return 0, false
+}
+
 // ErrNotHelloReply marks a line that is not a hello_reply at all: not JSON, or
 // another message type. Receivers ignore such lines; a Device may print boot
 // noise before it answers.
@@ -232,6 +275,7 @@ func DecodeHelloReply(line []byte) (HelloReply, error) {
 		HardwareProfile *HardwareProfile `json:"hardware_profile"`
 		Themes          []string         `json:"themes"`
 		SpritePacks     []string         `json:"sprite_packs"`
+		Orientation     *int             `json:"orientation"`
 	}
 	if err := json.Unmarshal(line, &raw); err != nil || raw.Type == nil || *raw.Type != "hello_reply" {
 		return HelloReply{}, ErrNotHelloReply
@@ -246,5 +290,14 @@ func DecodeHelloReply(line []byte) (HelloReply, error) {
 		HardwareProfile: *raw.HardwareProfile,
 		Themes:          raw.Themes,
 		SpritePacks:     raw.SpritePacks,
+		Orientation:     quarterTurn(raw.Orientation),
 	}, nil
+}
+
+// quarterTurn is degrees when they are 0, 90, 180 or 270; else nil.
+func quarterTurn(degrees *int) *int {
+	if degrees == nil || (*degrees != 0 && *degrees != 90 && *degrees != 180 && *degrees != 270) {
+		return nil
+	}
+	return degrees
 }

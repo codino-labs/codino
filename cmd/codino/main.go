@@ -82,7 +82,8 @@ second. get with no KEY lists every Preference. Keys:
                         installed with codino theme install
   brightness            1-100, percent of the Device's brightness cap
   layout                adaptive or aggregate
-  rotation              0, 90, 180 or 270 (degrees clockwise)
+  rotation              auto (follows a Device's IMU), or 0, 90, 180 or 270
+                        (degrees clockwise)
   quiet_mode            true or false: show nothing but Awaiting Input
   done_decay            e.g. 10m: how long Done shows before it decays to Idle
   disconnected_timeout  e.g. 5s (2s-1h): Host silence before Disconnected
@@ -272,6 +273,9 @@ func printStatus(out io.Writer, st host.Status, now time.Time) {
 	switch d := st.Device; {
 	case d.Claimed:
 		fmt.Fprintf(out, "Device: %s (firmware %s, protocol %d)\n", d.Name, d.Firmware, d.Protocol)
+		if d.Orientation != nil {
+			fmt.Fprintf(out, "Orientation: upright turned by %d° (what rotation auto follows)\n", *d.Orientation)
+		}
 	case d.Problem != "":
 		fmt.Fprintf(out, "Device: not connected: %s\n", d.Problem)
 	default:

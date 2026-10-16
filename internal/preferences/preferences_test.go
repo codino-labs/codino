@@ -54,7 +54,7 @@ func TestWithoutAConfigFileThePreferencesAreTheDefaults(t *testing.T) {
 		Theme:               "default",
 		Brightness:          100,
 		Layout:              preferences.Adaptive,
-		Rotation:            0,
+		Rotation:            preferences.AutoRotation,
 		QuietMode:           false,
 		DoneDecay:           10 * time.Minute,
 		DisconnectedTimeout: 5 * time.Second,
@@ -148,6 +148,7 @@ func TestAnInvalidConfigFileIsReportedWithTheLineAtFault(t *testing.T) {
 		{"brightness not a number", `brightness = "high"`, "brightness"},
 		{"unknown Layout", `layout = "tiles"`, "layout"},
 		{"rotation off the quarter turns", "rotation = 45", "rotation"},
+		{"rotation neither auto nor degrees", `rotation = "sideways"`, "rotation"},
 		{"quiet_mode not a bool", `quiet_mode = "yes"`, "quiet_mode"},
 		{"theme empty", `theme = ""`, "theme"},
 		{"theme not a Theme name", `theme = "My Theme"`, "theme"},
@@ -275,7 +276,7 @@ func TestUnsetReturnsAPreferenceToItsDefault(t *testing.T) {
 		t.Fatal(err) // already the default: nothing to do
 	}
 
-	if got := load(t, f).Rotation; got != 0 {
+	if got := load(t, f).Rotation; got != preferences.AutoRotation {
 		t.Errorf("rotation %d", got)
 	}
 	if strings.Contains(read(t, f), "rotation") {
@@ -289,6 +290,7 @@ func TestSetRefusesAnInvalidValueAndLeavesTheFileAlone(t *testing.T) {
 		{"brightness", "bright"},
 		{"layout", "tiles"},
 		{"rotation", "45"},
+		{"rotation", "sideways"},
 		{"quiet_mode", "maybe"},
 		{"done_decay", "soon"},
 		{"escalation.faster", "1h"}, // after the steady glow
@@ -400,5 +402,24 @@ func TestDurationsReadBackInTheirShortestForm(t *testing.T) {
 
 	if v, _ := f.Get("done_decay"); v != "1m30s" {
 		t.Errorf("done_decay %q", v)
+	}
+}
+
+func TestRotationIsAutoUnlessPinnedToDegrees(t *testing.T) {
+	f := configFile(t, "rotation = 90\n")
+
+	if err := f.Set("rotation", "auto"); err != nil {
+		t.Fatal(err)
+	}
+
+	p := load(t, f)
+	if p.Rotation != preferences.AutoRotation {
+		t.Errorf("rotation %d, want auto", p.Rotation)
+	}
+	if got, _ := p.Get("rotation"); got != "auto" {
+		t.Errorf("get rotation = %q", got)
+	}
+	if !strings.Contains(read(t, f), `rotation = "auto"`) {
+		t.Errorf("file:\n%s", read(t, f))
 	}
 }

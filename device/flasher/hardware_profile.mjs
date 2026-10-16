@@ -35,7 +35,7 @@ export const presets = [
     preselected: true,
     profile: {
       width: 8, height: 8, data_pin: 14, serpentine: false, color_order: "RGB",
-      brightness_cap: 48, current_cap_ma: 300, button: false, imu: true,
+      brightness_cap: 48, current_cap_ma: 300, button: true, imu: true,
     },
   },
   {
@@ -43,7 +43,7 @@ export const presets = [
     label: "ESP32-S3-Matrix + external 8×8 panel on GPIO 1",
     profile: {
       width: 8, height: 8, data_pin: 1, serpentine: false, color_order: "GRB",
-      brightness_cap: 64, current_cap_ma: 330, button: false, imu: true,
+      brightness_cap: 64, current_cap_ma: 330, button: true, imu: true,
     },
   },
   {
@@ -51,7 +51,7 @@ export const presets = [
     label: "ESP32-S3-Matrix + external 16×16 panel on GPIO 1",
     profile: {
       width: 16, height: 16, data_pin: 1, serpentine: true, color_order: "GRB",
-      brightness_cap: 32, current_cap_ma: 330, button: false, imu: true,
+      brightness_cap: 32, current_cap_ma: 330, button: true, imu: true,
     },
   },
 ];

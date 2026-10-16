@@ -52,6 +52,9 @@ type DeviceConnection struct {
 	// Themes and SpritePacks the claimed Device has, built-in ones first.
 	Themes      []string `json:"themes,omitempty"`
 	SpritePacks []string `json:"sprite_packs,omitempty"`
+	// Orientation is the rotation the claimed Device's IMU senses: the one
+	// that shows the picture upright. None without an IMU.
+	Orientation *int `json:"orientation,omitempty"`
 }
 
 // Status reports the sessions, by Tile slot, and the Device connection.
@@ -80,6 +83,10 @@ func (h *Host) Status() Status {
 
 			Themes:      h.onDevice.themes,
 			SpritePacks: h.onDevice.spritePacks,
+		}
+		if h.device.HelloReply.HardwareProfile.IMU {
+			orientation := h.orientation
+			st.Device.Orientation = &orientation
 		}
 	} else {
 		st.Device.Problem, st.Device.UpdateURL = h.deviceProblem, h.deviceUpdateURL

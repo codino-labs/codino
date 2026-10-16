@@ -51,7 +51,7 @@ type Preferences struct {
 	Brightness int
 	Layout     Layout
 	// Rotation is how many degrees (0, 90, 180, 270) the picture is turned
-	// clockwise on the matrix.
+	// clockwise on the matrix, or AutoRotation.
 	Rotation int
 	// QuietMode shows nothing but Awaiting Input.
 	QuietMode bool
@@ -66,12 +66,20 @@ type Preferences struct {
 	ProjectColors map[string]string
 }
 
+// AutoRotation is the rotation Preference "auto": the Device turns the
+// picture by the orientation its IMU senses, or not at all without one.
+const AutoRotation = -1
+
+// autoRotation is how AutoRotation is written.
+const autoRotation = "auto"
+
 // Defaults are the Preferences without a config file.
 func Defaults() Preferences {
 	return Preferences{
 		Theme:               "default",
 		Brightness:          100,
 		Layout:              Adaptive,
+		Rotation:            AutoRotation,
 		DoneDecay:           10 * time.Minute,
 		DisconnectedTimeout: 5 * time.Second,
 		Escalation:          Escalation{Faster: 30 * time.Second, Takeover: 2 * time.Minute, Steady: 10 * time.Minute},
@@ -99,6 +107,8 @@ const (
 	boolKind
 	durationKind
 	colorKind
+	// rotationKind is an integer or the string "auto".
+	rotationKind
 )
 
 // preference is one Preference: its key, how it is written, how it is read
@@ -150,11 +160,23 @@ var preferenceTable = []preference{
 		},
 	},
 	{
-		path: []string{"rotation"}, kind: integerKind,
-		get: func(p Preferences) value { return value{kind: integerValue, num: int64(p.Rotation)} },
+		path: []string{"rotation"}, kind: rotationKind,
+		get: func(p Preferences) value {
+			if p.Rotation == AutoRotation {
+				return value{kind: stringValue, text: autoRotation}
+			}
+			return value{kind: integerValue, num: int64(p.Rotation)}
+		},
 		set: func(p *Preferences, v value) error {
+			if v.kind == stringValue {
+				if v.text != autoRotation {
+					return fmt.Errorf("want %q or 0, 90, 180 or 270 degrees, got %q", autoRotation, v.text)
+				}
+				p.Rotation = AutoRotation
+				return nil
+			}
 			if v.num != 0 && v.num != 90 && v.num != 180 && v.num != 270 {
-				return fmt.Errorf("want 0, 90, 180 or 270 degrees, got %d", v.num)
+				return fmt.Errorf("want %q or 0, 90, 180 or 270 degrees, got %d", autoRotation, v.num)
 			}
 			p.Rotation = int(v.num)
 			return nil
@@ -347,6 +369,12 @@ func fromDocument(doc document) (Preferences, error) {
 
 // checkKind reports a value of the wrong TOML type for the preference.
 func checkKind(s preference, v value) error {
+	if s.kind == rotationKind {
+		if v.kind == integerValue || v.kind == stringValue {
+			return nil
+		}
+		return fmt.Errorf("want %q or an integer", autoRotation)
+	}
 	want := map[kind]valueKind{
 		stringKind: stringValue, durationKind: stringValue, colorKind: stringValue,
 		integerKind: integerValue, boolKind: boolValue,
@@ -430,6 +458,15 @@ func splitKey(key string) []string {
 // parseArgument reads a value given on the command line for s.
 func parseArgument(s preference, text string) (value, error) {
 	switch s.kind {
+	case rotationKind:
+		if text == autoRotation {
+			return value{kind: stringValue, text: text}, nil
+		}
+		n, err := strconv.ParseInt(text, 10, 64)
+		if err != nil {
+			return value{}, fmt.Errorf("%s: want %q or degrees, got %q", s.key(), autoRotation, text)
+		}
+		return value{kind: integerValue, num: n}, nil
 	case integerKind:
 		n, err := strconv.ParseInt(text, 10, 64)
 		if err != nil {

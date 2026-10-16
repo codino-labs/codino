@@ -18,14 +18,15 @@ target_include_directories(device_core SYSTEM PUBLIC third_party)
 
 # The firmware shell's portable parts: line framing, LED wiring, the stored
 # Hardware Profile, flash stores. No Arduino or FastLED either.
-add_library(device_shell STATIC shell/flash_store.cpp shell/hardware_profile.cpp shell/led_wiring.cpp)
+add_library(device_shell STATIC shell/flash_store.cpp shell/hardware_profile.cpp shell/imu_gestures.cpp
+  shell/led_wiring.cpp)
 target_include_directories(device_shell PUBLIC shell)
 target_link_libraries(device_shell PUBLIC device_core)
 
 # Native Device core tests (doctest).
 enable_testing()
 add_executable(device_core_test test/main.cpp test/device_core_test.cpp test/theme_test.cpp
-  test/theme_snapshot_test.cpp test/shell_test.cpp)
+  test/theme_snapshot_test.cpp test/shell_test.cpp test/input_test.cpp)
 target_link_libraries(device_core_test PRIVATE device_core device_shell)
 target_compile_definitions(device_core_test PRIVATE
   PROTOCOL_FIXTURES_DIR="${REPO_ROOT}/protocol/fixtures"

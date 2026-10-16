@@ -15,7 +15,7 @@ HardwareProfile referenceHardwareProfile() {
   p.colorOrder = "RGB";
   p.brightnessCap = 48;
   p.currentCapMa = 300;
-  p.button = false;
+  p.button = true;
   p.imu = true;
   return p;
 }

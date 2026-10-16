@@ -14,8 +14,8 @@ The firmware reports this profile in its `hello_reply`, and `protocol/fixtures/h
 | `color_order` | `"RGB"` | Waveshare's Color and Game demos use `NEO_RGB` [3]. Robojax, writing for this board, says "The matrix on this board expects RGB order" [4]. | Confirmed on the board (step 4, 2026-10-16). |
 | `brightness_cap` | 48 | Waveshare warns that high brightness heats the board fast and can damage it [1][3]. Its demos cap brightness at 40–60 of 255 [3]. | A conservative guess. Check the heat (step 9). |
 | `current_cap_ma` | 300 | Leaves 200 mA of a 500 mA USB port: 100 mA for the ESP32-S3 (an estimate) and 100 mA of margin. The firmware enforces it (`LedWiring`, below): by the power model a whole-matrix Takeover in red at the cap of 48 draws 257 mA and goes out as it is; a white frame at the cap (570 mA by the model) is dimmed to fit. | Measure it (step 9). |
-| `button` | `false` | The board has a BOOT button on IO0 [2], but nothing reads it yet. #13 makes it Acknowledge and should then turn this field to `true`. | |
-| `imu` | `true` | QMI8658 on I2C: SDA IO11, SCL IO12, INT1 IO10, INT2 IO13 [2][3]. #13 uses it. | Certain |
+| `button` | `true` | The BOOT button on IO0 [2]: a press Acknowledges (Button and IMU, below). | Certain |
+| `imu` | `true` | QMI8658 on I2C: SDA IO11, SCL IO12, INT1 IO10, INT2 IO13 [2][3]. A double-tap Acknowledges; its orientation turns the picture under auto rotation (Button and IMU, below). | Certain |
 
 Sources:
 
@@ -33,15 +33,26 @@ The brightness cap scales every channel; the current cap bounds the frame as a w
 
 6. PJRC, "How Much Current Do WS2812 / NeoPixel LEDs Really Use?": <https://www.pjrc.com/how-much-current-do-ws2812-neopixel-leds-really-use>
 
+### Button and IMU
+
+The firmware reads them only when the Hardware Profile says the build has them (`button`, `imu`); a build without either works as before. Their logic is portable and tested natively (`device/shell/button.h`, `imu_gestures.*`; `device/test/input_test.cpp`); the glue in `firmware/src/main.cpp` is checked by hand (step 15).
+
+- **BOOT button** (GPIO 0, low while pressed, read every loop): a press that has held for `Button::kSettleMs` (20 ms) Acknowledges, once however long it is held. GPIO 0 is a strapping pin: held while RESET is pressed, it enters download mode instead, as always.
+- **QMI8658** (I2C at 400 kHz, address 0x6B, else 0x6A): the accelerometer alone at 224 Hz and ±8 g, read every 5 ms. A board where neither address answers goes without double-tap and auto-rotation.
+- **Double-tap**: `TapDetector` takes a jolt of more than `kTapMg` (1.2 g) away from gravity that dies down within `kMaxTapMs` (50 ms) as a tap, and two taps 80–500 ms apart as an Acknowledge. A longer push (the Device shoved, picked up) is no tap, and gravity is taken afresh after one. The thresholds are a starting point, to tune on the board against desk bumps (step 15).
+- **Orientation**: `OrientationSensor` takes the reading along the matrix's right and down, and once one edge has stood highest for `kSettleMs` (500 ms), by a margin past 45°, reports the rotation that shows the picture upright (`DeviceCore::orient`, the `orientation` message). Lying flat keeps the last one. The firmware feeds it the IMU's x and y as the matrix's right and down: that mapping is to confirm on the board (step 15).
+
+A board flashed before #13 keeps the Hardware Profile it stored then, with `button` `false`: erase it (`$ESPTOOL erase_region 0x210000 0x1000`) and the next boot stores the reference profile.
+
 ## Hardware Profile presets
 
 The web flasher (below) offers these, the reference board's preselected, plus Custom (every field). They live in `device/flasher/hardware_profile.mjs`; `device/test/golden/hardware-profiles.tsv` holds the line each is stored as.
 
 | Preset | Size | `data_pin` | `serpentine` | `color_order` | `brightness_cap` | `current_cap_ma` | `button`, `imu` |
 |---|---|---|---|---|---|---|---|
-| ESP32-S3-Matrix, built-in 8×8 (preselected) | 8×8 | 14 | `false` | `RGB` | 48 | 300 | `false`, `true` |
-| ESP32-S3-Matrix + external 8×8 panel on GPIO 1 | 8×8 | 1 | `false` | `GRB` | 64 | 330 | `false`, `true` |
-| ESP32-S3-Matrix + external 16×16 panel on GPIO 1 | 16×16 | 1 | `true` | `GRB` | 32 | 330 | `false`, `true` |
+| ESP32-S3-Matrix, built-in 8×8 (preselected) | 8×8 | 14 | `false` | `RGB` | 48 | 300 | `true`, `true` |
+| ESP32-S3-Matrix + external 8×8 panel on GPIO 1 | 8×8 | 1 | `false` | `GRB` | 64 | 330 | `true`, `true` |
+| ESP32-S3-Matrix + external 16×16 panel on GPIO 1 | 16×16 | 1 | `true` | `GRB` | 32 | 330 | `true`, `true` |
 
 The external panels are wired with three Dupont wires: 5V, GND and data to GPIO 1. The schematic [2] routes IO1–IO7 and IO33–IO40 to the pin headers; GPIO 1 is the first of them and has no other use on the board. Likely, not certain: check the pin labelled 1 on the board's pinout (step 13). The built-in matrix stays dark, never driven. Rigid 8×8 panels are usually wired row by row in GRB; flexible 16×16 ones zig-zag, so mount the panel with its zig-zag along the rows (or choose Custom). Another panel or board: Custom.
 
@@ -231,3 +242,11 @@ On Linux, install the udev rule first (README, *Linux: serial port permissions*)
     - [ ] It prints the Device's `hello_reply` (protocol 0), and the matrix shows an amber arrow pointing up, not Disconnected, and keeps showing it after the script ends.
     - [ ] Start the daemon: its `hello` (protocol 0) ends the arrow and the Device is claimed.
     - [ ] With `codino set rotation 180` pushed before, the arrow points down on the board as mounted upright (it points up to whoever turned the Device).
+15. **Button, double-tap and auto-rotation** (#13). Erase the stored profile first if the board was flashed before #13 (Button and IMU, above). Run the daemon; `codino status` shows `Orientation: upright turned by 0°` with the USB-C edge up.
+    - [ ] With a session Done, a press of BOOT clears it (`codino status` shows it Idle); with one Awaiting Input, a press restarts its Escalation.
+    - [ ] Holding BOOT is one Acknowledge; pressing BOOT while pressing RESET still enters download mode.
+    - [ ] Two taps on the board's face, a quarter second apart, Acknowledge. One tap doesn't, nor two taps a second apart.
+    - [ ] Tapping the desk beside it, putting a mug down next to it, typing on the same desk and sliding the board along it Acknowledge nothing, over a few minutes. If they do, raise `TapDetector::kTapMg`; if real taps are missed, lower it.
+    - [ ] Stand the board on each edge in turn. After half a second the picture turns upright, and `codino status` says by how much: USB-C up 0, USB-C on the left 90 (the picture's top on the board's right edge), USB-C down 180, USB-C on the right 270. If a turn goes the wrong way or swaps 90 and 270, fix the axis mapping in `sampleImu()` (`firmware/src/main.cpp`) and record it here.
+    - [ ] Laid flat, the picture keeps the last rotation. Held near 45°, it doesn't flicker between two.
+    - [ ] `codino set rotation 0` pins the picture whatever way the board stands; `codino unset rotation` returns to auto.

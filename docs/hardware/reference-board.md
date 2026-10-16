@@ -149,8 +149,8 @@ On Linux, install the udev rule first (README, *Linux: serial port permissions*)
    - [x] The daemon logs the claim of the board's port.
    - [x] `./codino status` shows `Device: <port> (firmware 0.1.0, protocol 0)`.
    - [x] The matrix pulses, then escalates (faster after 30 s, Takeover after 2 min).
-   - [ ] `./codino event --session a --end` darkens it.
-   - [ ] Ctrl-C on the daemon sends `goodbye`: the matrix goes dark, not Disconnected.
+   - [x] `./codino event --session a --end` darkens it.
+   - [x] Ctrl-C on the daemon sends `goodbye`: the matrix goes dark, not Disconnected.
 4. **Wiring and color order.** Show the Raw Mode fixture, a frame where the LED at (x, y) is R = 32x, G = 32y, B = 128:
    ```sh
    $P/venv/bin/python - /dev/ttyACM0 <<'EOF'   # the board's port
@@ -178,7 +178,7 @@ On Linux, install the udev rule first (README, *Linux: serial port permissions*)
    - [x] `codino status` shows no Device.
    - [x] Plug it back in: the Host claims it again within a few seconds.
    - [x] The session shows again, with Escalation counted from when it really started waiting.
-   - [ ] The same works on a different USB port.
+   - [x] The same works on a different USB port.
 7. **Opening the port never resets the Device.** With the daemon stopped, run:
    ```sh
    $P/venv/bin/python - /dev/ttyACM0 <<'EOF'

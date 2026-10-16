@@ -94,6 +94,10 @@ Nothing is written into the plugin's own directory, which changes on every updat
 
 The Virtual Device is the Device core, built for your terminal. See *Demo* in [AGENTS.md](AGENTS.md).
 
+## Showcase
+
+`scripts/showcase.sh` walks you through every feature on a Device, or on the Virtual Device: the Session States, Escalation, the Layouts and Project Colors, Done decay, the Preferences, Themes, Raw Mode, the web UI, a real Claude Code session and replugging. It drives `codino` itself and tells you what to look for on the matrix. Your Preferences are restored when it ends.
+
 ## Contributing
 
 [AGENTS.md](AGENTS.md) has the conventions, the layout and the done-checks. [CONTEXT.md](CONTEXT.md) holds the vocabulary, and [docs/adr/](docs/adr/) the decisions. The wire protocol is in [protocol/README.md](protocol/README.md).

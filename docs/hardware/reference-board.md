@@ -140,8 +140,8 @@ On Linux, install the udev rule first (README, *Linux: serial port permissions*)
    Press RESET.
    - [ ] The matrix goes dark at boot. About 5 s later it shows Disconnected: a dim diagonal on a dark matrix.
 2. **Enumeration.**
-   - [ ] `lsusb` shows `303a:0002 Codino Codino`.
-   - [ ] Linux: `/dev/serial/by-id/usb-Codino_Codino_<MAC>-if00` exists.
+   - [x] `lsusb` shows `303a:0002 Codino Codino`.
+   - [x] Linux: `/dev/serial/by-id/usb-Codino_Codino_<MAC>-if00` exists.
    - [ ] macOS: a `/dev/cu.usbmodem…` port appears.
    - [ ] Windows: a COM port named "Codino" (or "USB Serial Device") appears.
    - [ ] Nothing but protocol lines comes out of the port: no boot log.

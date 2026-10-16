@@ -112,7 +112,7 @@ python3 -m http.server -d device/build/flasher 8000
 
 Open <http://localhost:8000> in desktop Chrome or Edge: Web Serial needs one of them, and HTTPS or `localhost` (not a LAN address). The page builds an ESP Web Tools manifest in the browser: `firmware/firmware-merged.bin` at `0x0` and the profile image at `0x210000`, both by absolute URL, the profile as a `blob:`. ESP Web Tools asks whether to erase first: yes on a first install; no keeps the cached Preferences and installed Themes (in LittleFS) when updating.
 
-The flasher has no public URL yet. `devicelink.FlasherURL`, which `codino status` and the web UI show when a Device's firmware is too old, points at the README's flashing section until it does: set it to the published page's address then.
+The flasher is published at <https://codino-labs.github.io/codino/> by `.github/workflows/flasher.yml` (on pushes to `main` that touch `device/` or `protocol/`); `devicelink.FlasherURL`, which `codino status` and the web UI show when a Device's firmware is too old, points there. After a flash the board stays in download mode until RESET (checked on the board, 2026-10-16), and ESP Web Tools 10.4.0 leaves its dialog on "Connecting" after a failed install until the page is reloaded: the page says both.
 
 **Download mode by hand.** The firmware never reboots into the bootloader on its own (USB, below), so ESP Web Tools can't put a running Device into download mode: the page says to hold BOOT, press RESET, release BOOT, and to choose the port that then appears (`303a:1001`, "USB JTAG/serial debug unit"), not "Codino". In download mode the ROM speaks through the USB-Serial/JTAG peripheral, whose DTR/RTS do drive the chip's reset, so esptool-js can reset the board into the new firmware when it is done. Whether it does on this board is to check (step 12).
 
@@ -209,7 +209,7 @@ On Linux, install the udev rule first (README, *Linux: serial port permissions*)
 9. **Brightness and heat.**
    - [ ] Hold a Takeover (`codino event --session a --state awaiting_input`, wait 2 min) at `codino set brightness 100` for 10 minutes. The board stays comfortable to touch, under about 50 °C on an IR thermometer.
    - [ ] Repeat with a full-white Raw Mode frame: `codino show` a white PNG. The current limit dims it (570 mA by the model at the cap of 48). The USB meter stays under `current_cap_ma` (300 mA) above the board's draw with a dark matrix. If it doesn't, the model is off for these LEDs: lower `current_cap_ma`. If it stays far under and the white looks dim, the board's LEDs draw less than the model says: raise it (keeping 500 mA in all).
-   - [ ] `codino set brightness 10` visibly dims everything, and dim states stay lit.
+   - [x] `codino set brightness 10` visibly dims everything, and dim states stay lit.
    - [ ] If the board runs hot, lower `brightness_cap` (and the fixture) as described above.
 10. **Persistence across reboot.**
     - [x] `codino set brightness 20`, `codino set rotation 90`, then stop the daemon and press RESET. The Disconnected diagonal at boot is dim and runs from top-left to bottom-right before any Host connects. (Not 180: the diagonal turned 180° is the same line.)
@@ -226,22 +226,22 @@ On Linux, install the udev rule first (README, *Linux: serial port permissions*)
     - [ ] A profile with `data_pin` 19 (USB D−) leads to the reference profile in the `hello_reply` instead.
     - [ ] Restore with `$ESPTOOL erase_region 0x210000 0x1000`.
 12. **Web flasher.** `make -C device flasher`, serve it (Web flasher, above) and open <http://localhost:8000> in Chrome.
-    - [ ] Without download mode, Install and the "Codino" port end in ESP Web Tools' "Failed to initialize": the page's step 2 explains why. Nothing on the board changed.
-    - [ ] With the reference preset, BOOT + RESET, Install, the `303a:1001` port and "erase": it flashes. Note whether the board starts the new firmware by itself or needs RESET, and make the page's last hint say so.
-    - [ ] The matrix shows Disconnected 5 s after boot; the Host claims it (`codino status`).
-    - [ ] `$ESPTOOL read_flash 0x210000 0x1000 hw.bin; head -1 hw.bin` is the line the page showed under "What gets written".
-    - [ ] Choose the 16×16 preset (no panel needed), install without erasing: the `hello_reply` (step 4's script) reports 16×16, GPIO 1, `GRB`, cap 32 and current cap 330, and `codino get` still shows the Preferences set before (LittleFS kept).
-    - [ ] Custom with 64×64 is refused on the page, Install disabled.
-    - [ ] Flash the reference preset again.
-    - [ ] Hosted on HTTPS (once there is a host): the same works, and `devicelink.FlasherURL` is set to its address.
+    - [x] Without download mode, Install and the "Codino" port end in ESP Web Tools' "Failed to initialize": the page's step 2 explains why. Nothing on the board changed.
+    - [x] With the reference preset, BOOT + RESET, Install, the `303a:1001` port and "erase": it flashes. Note whether the board starts the new firmware by itself or needs RESET, and make the page's last hint say so.
+    - [x] The matrix shows Disconnected 5 s after boot; the Host claims it (`codino status`).
+    - [x] `$ESPTOOL read_flash 0x210000 0x1000 hw.bin; head -1 hw.bin` is the line the page showed under "What gets written".
+    - [x] Choose the 16×16 preset (no panel needed), install without erasing: the `hello_reply` (step 4's script) reports 16×16, GPIO 1, `GRB`, cap 32 and current cap 330, and a Theme installed before is still listed (LittleFS kept).
+    - [x] Custom with 64×64 is refused on the page, Install disabled.
+    - [x] Flash the reference preset again.
+    - [x] Hosted on HTTPS (once there is a host): the same works, and `devicelink.FlasherURL` is set to its address.
 13. **External panels.** Check on the board's pinout that the header pin labelled 1 is GPIO 1. Wire an 8×8 panel (5V, GND, data to GPIO 1) and flash its preset; then a 16×16 panel with its preset.
     - [ ] Step 4's frame shows right on each (fix the preset's `serpentine` or `color_order` if not, here and in `hardware-profiles.tsv`).
     - [ ] The built-in matrix stays dark.
     - [ ] With a USB meter: a white `codino show` and a Takeover each stay under 500 mA in all; the 16×16 Takeover is dim but readable. If the board itself draws more than the 100 mA budgeted, lower the presets' `current_cap_ma`.
 14. **Update me.** With the daemon stopped, run step 4's script with `"protocol":1` in the hello.
-    - [ ] It prints the Device's `hello_reply` (protocol 0), and the matrix shows an amber arrow pointing up, not Disconnected, and keeps showing it after the script ends.
-    - [ ] Start the daemon: its `hello` (protocol 0) ends the arrow and the Device is claimed.
-    - [ ] With `codino set rotation 180` pushed before, the arrow points down on the board as mounted upright (it points up to whoever turned the Device).
+    - [x] It prints the Device's `hello_reply` (protocol 0), and the matrix shows an amber arrow pointing up, not Disconnected, and keeps showing it after the script ends.
+    - [x] Start the daemon: its `hello` (protocol 0) ends the arrow and the Device is claimed.
+    - [x] With `codino set rotation 180` pushed before, the arrow points down on the board as mounted upright (it points up to whoever turned the Device).
 15. **Button, double-tap and auto-rotation** (#13). Erase the stored profile first if the board was flashed before #13 (Button and IMU, above). Run the daemon; `codino status` shows `Orientation: upright turned by 0°` with the USB-C edge up.
     - [x] With a session Done, a press of BOOT clears it (`codino status` shows it Idle); with one Awaiting Input, a press restarts its Escalation.
     - [ ] Holding BOOT is one Acknowledge; pressing BOOT while pressing RESET still enters download mode.

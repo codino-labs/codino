@@ -50,10 +50,9 @@ func (f DiscovererFunc) Candidates() []Candidate { return f() }
 var NoDevices = DiscovererFunc(func() []Candidate { return nil })
 
 // FlasherURL is where the human updates a Device's firmware: the web
-// flasher (device/flasher). It has no public address yet, so this points at
-// the README's flashing section; set it to the published flasher's URL once
-// there is one (docs/hardware/reference-board.md, "Web flasher").
-const FlasherURL = "https://github.com/codino-labs/codino#2-flash"
+// flasher (device/flasher), published to GitHub Pages by
+// .github/workflows/flasher.yml.
+const FlasherURL = "https://codino-labs.github.io/codino/"
 
 // VersionMismatchError reports a Device speaking another protocol version
 // than the Host. The Host refuses to drive it, and the Device shows "update

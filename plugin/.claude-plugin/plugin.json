@@ -5,5 +5,6 @@
   "author": {
     "name": "Roberto Gallea"
   },
-  "repository": "https://github.com/codino-labs/codino"
+  "repository": "https://github.com/codino-labs/codino",
+  "license": "MIT"
 }

@@ -101,3 +101,7 @@ The Virtual Device is the Device core, built for your terminal. See *Demo* in [A
 ## Contributing
 
 [AGENTS.md](AGENTS.md) has the conventions, the layout and the done-checks. [CONTEXT.md](CONTEXT.md) holds the vocabulary, and [docs/adr/](docs/adr/) the decisions. The wire protocol is in [protocol/README.md](protocol/README.md).
+
+## Licence
+
+MIT: see [LICENSE](LICENSE). The vendored ArduinoJson and doctest keep their own MIT licences (`device/third_party/`), and the web flasher bundles ESP Web Tools under its own licence. Clawd is never part of this repository ([ADR 0003](docs/adr/0003-name-and-clawd.md)).

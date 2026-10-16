@@ -178,15 +178,16 @@ void startImu() {
   }
 }
 
-// One accelerometer sample through the gestures. The IMU's axes as the
-// matrix lies: checked on the reference board (docs/hardware/reference-board.md).
+// One accelerometer sample through the gestures. The QMI8658 lies turned on
+// the reference board: the matrix's right is its +y and down its -x
+// (measured on the board, docs/hardware/reference-board.md, step 15).
 void sampleImu(uint32_t now) {
   uint8_t raw[6];
   if (!imuRead(kImuAxL, raw, sizeof raw)) return;
   auto mg = [&](int i) { return static_cast<int16_t>(raw[i] | raw[i + 1] << 8) * 1000 / kImuLsbPerG; };
   const int ax = mg(0), ay = mg(2), az = mg(4);
   if (taps.update(ax, ay, az, now)) send(core->acknowledge());
-  if (orientation.update(ax, ay, now)) send(core->orient(orientation.rotation()));
+  if (orientation.update(ay, -ax, now)) send(core->orient(orientation.rotation()));
 }
 
 void show(const device::PixelBuffer& frame) {
